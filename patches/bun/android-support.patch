@@ -2018,7 +2018,7 @@ index 7d8ef7c..0d8f40f 100644
 diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
 --- a/src/resolver/resolver.zig
 +++ b/src/resolver/resolver.zig
-@@ -2849,10 +2849,17 @@ pub const Resolver = struct {
+@@ -2853,12 +2853,18 @@
                      // where people try to import from a path containing a file as a parent
                      // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
                      // list which contains such paths and treating them as missing means we just
@@ -2038,7 +2038,8 @@ diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
                      => return null,
  
                      else => {
-@@ -3814,7 +3821,10 @@ pub const Resolver = struct {
+@@ -3811,7 +3817,11 @@
+         };
  
          if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
 -            if (dir_entry.err.original_err != error.ENOENT) {
