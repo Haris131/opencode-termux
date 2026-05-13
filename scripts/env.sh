@@ -14,6 +14,8 @@ export WEBKIT_COMMIT="${WEBKIT_COMMIT:-017930ebf915121f8f593bef61cbbca82d78132d}
 export ICU_VERSION="${ICU_VERSION:-75.1}"
 export ZIG_VERSION="${ZIG_VERSION:-0.15.2}"
 export OPENCODE_VERSION="${OPENCODE_VERSION:-1.3.13}"
+export OPENTUI_VERSION="${OPENTUI_VERSION:-0.2.6}"
+export OPENTUI_TAG="v${OPENTUI_VERSION}"
 export ANDROID_API="${ANDROID_API:-24}"
 
 # Android NDK
@@ -59,6 +61,7 @@ echo "API Level:     ${ANDROID_API}"
 echo "Target:        ${ANDROID_TRIPLE}"
 echo "Bun version:   ${BUN_VERSION}"
 echo "WebKit commit: ${WEBKIT_COMMIT}"
+echo "OpenTui ver:   ${OPENTUI_VERSION}"
 echo "OpenCode ver:  ${OPENCODE_VERSION}"
 echo "Jobs:          ${JOBS}"
 echo "==========================================="
