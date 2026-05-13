@@ -1,9 +1,6 @@
 name: Build OpenCode for Android/Termux
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       opencode_version:
@@ -27,8 +24,10 @@ env:
 
 jobs:
   build:
+    permissions:
+      contents: write
     name: Build Android aarch64
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours for full build
 
     steps:
@@ -41,7 +40,8 @@ jobs:
 
       - name: Create work directory
         run: |
-          mkdir -p "$WORK_DIR"
+          sudo mkdir -p "$WORK_DIR"
+          sudo chown -R "$USER:$GROUPS" "$WORK_DIR"
           echo "Work directory: $WORK_DIR"
           df -h /mnt/spindrive
 
@@ -272,26 +272,29 @@ jobs:
       # =============================================
       # Upload artifacts
       # =============================================
-      - name: Upload packages as artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: opencode-termux-${{ env.OPENCODE_VERSION }}
-          path: |
-            ${{ env.WORK_DIR }}/packages/*.zip
-            ${{ env.WORK_DIR }}/packages/*.pkg.tar.xz
-            ${{ env.WORK_DIR }}/packages/*.deb
+#      - name: Upload packages as artifacts
+#        uses: actions/upload-artifact@v4
+#        with:
+#          name: opencode-termux-${{ env.OPENCODE_VERSION }}
+#          path: |
+#            ${{ env.WORK_DIR }}/packages/*.zip
+#            ${{ env.WORK_DIR }}/packages/*.pkg.tar.xz
+#            ${{ env.WORK_DIR }}/packages/*.deb
+#            ${{ env.WORK_DIR }}/bun-build/bun
 
       # =============================================
-      # Release (only on tag push)
+      # Release
       # =============================================
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          name: OpenCode ${{ env.OPENCODE_VERSION }} for Android/Termux (aarch64)
+          tag_name: v${{ env.OPENCODE_VERSION }}
           files: |
             ${{ env.WORK_DIR }}/packages/*.zip
             ${{ env.WORK_DIR }}/packages/*.pkg.tar.xz
             ${{ env.WORK_DIR }}/packages/*.deb
+            ${{ env.WORK_DIR }}/bun-build/bun
           body: |
             ## OpenCode ${{ env.OPENCODE_VERSION }} for Android/Termux (aarch64)
 
