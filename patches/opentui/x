@@ -1,7 +1,5 @@
-diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 5a8bcb8..b1d4642 100644
---- a/packages/core/src/zig/build.zig
-+++ b/packages/core/src/zig/build.zig
+--- packages/core/src/zig/build.zig	2026-05-14 17:41:03.994696655 +0700
++++ ../build.zig	2026-05-14 17:46:54.442696676 +0700
 @@ -449,6 +449,29 @@
          else => {},
      }
