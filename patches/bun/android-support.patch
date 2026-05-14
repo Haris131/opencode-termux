@@ -76,7 +76,7 @@ diff --git a/cmake/CSources.txt b/cmake/CSources.txt
 index 67bf951..08212f1 100644
 --- a/cmake/CSources.txt
 +++ b/cmake/CSources.txt
-@@ -8,4 +8,5 @@ packages/bun-usockets/src/quic.c
+@@ -8,4 +8,6 @@ packages/bun-usockets/src/quic.c
  packages/bun-usockets/src/socket.c
  packages/bun-usockets/src/udp.c
  src/bun.js/bindings/uv-posix-polyfills.c
@@ -930,7 +930,7 @@ new file mode 100644
 index 0000000..0000000
 --- /dev/null
 +++ b/src/android_heap_tagging.c
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,122 @@
 +/**
 + * Android Heap Pointer Tagging Disable Shim (v2)
 + *
@@ -1090,7 +1090,7 @@ diff --git a/src/bun.js/bindings/ZigGlobalObject.cpp b/src/bun.js/bindings/ZigGl
 index 5e534e5..e60230d 100644
 --- a/src/bun.js/bindings/ZigGlobalObject.cpp
 +++ b/src/bun.js/bindings/ZigGlobalObject.cpp
-@@ -275,20 +275,35 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -275,19 +275,48 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
      }
  #endif
  
@@ -1141,7 +1141,7 @@ index 5e534e5..e60230d 100644
          JSC::Options::useJITCage() = false;
          JSC::Options::useShadowRealm() = true;
          JSC::Options::useV8DateParser() = true;
-@@ -298,6 +313,15 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -298,6 +323,21 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
          JSC::Options::heapGrowthMaxIncrease() = 2.0;
          JSC::dangerouslyOverrideJSCBytecodeCacheVersion(getWebKitBytecodeCacheVersion());
  
