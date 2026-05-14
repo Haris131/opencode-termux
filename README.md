@@ -159,7 +159,6 @@ Bun has zero Android support. Every patch falls into one of these categories:
 - **Signal-based VM traps disabled** (`usePollingTraps=true`) -- Android's `debuggerd` crash handler intercepts SIGSEGV before the app's signal handler, so JSC's signal-based traps crash the process instead of being caught.
 - **Wasm fault signal handler disabled** (`useWasmFaultSignalHandler=false`) -- Same `debuggerd` issue. Uses explicit bounds checking instead.
 - **Options set via `setenv("JSC_*")` BEFORE `JSC::initialize()`** -- `Options::initialize()` resets all options to defaults before reading env vars. Setting options via the API before `initialize()` has no effect.
-- **Heap pointer tagging disabled via `android_mallopt` constructor** (`android_heap_tagging.c`) -- On Android 12+ (SDK 31+) with ARM64 TBI-capable chipsets (e.g. Snapdragon 865/kona), Bionic's Scudo allocator enables heap pointer tagging (TBI) by default, storing a 4-bit tag in bits [55:52] of every heap pointer. JSC's JIT allocator does page-aligned masking (`ptr & ~(pageSize-1)`) which strips the top byte. When the stripped pointer reaches `free()`, Scudo detects the truncated tag and calls `abort()` → SIGABRT. Fix: a `__attribute__((constructor(101)))` function calls `android_mallopt(M_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE)` via `dlsym()` before any JIT allocations. Using `dlsym` ensures API 24 binary compatibility (public NDK header requires API 26, but libc.so exports the symbol since API 21). (Fixes [Issue #5](https://github.com/guysoft/opencode-termux/issues/5))
 
 #### Standalone binary format
 - **`StandaloneModuleGraph.zig` Offsets struct extended** -- Added `compile_exec_argv_ptr`, `flags` fields and `Flags` type to match the format produced by host Bun 1.3.2.
@@ -243,8 +242,6 @@ We can't use Bun 1.2.13 as host either, because OpenCode's monorepo uses `catalo
 | TinyCC FFI compilation | Low | `libtcc.a` is linked but TCC's runtime code generation may not produce valid ARM64 code. FFI is not commonly used by OpenCode. |
 | SIGPWR signals | None | Many SIGPWR signals appear in strace -- related to Android's power management or Bun's signal handling. Not errors. |
 
-> **Note:** SIGABRT on Snapdragon 865 / Android 12 (SDK 31) was previously a crash condition ([Issue #5](https://github.com/guysoft/opencode-termux/issues/5)). Fixed in the current patch via `android_heap_tagging.c` — see Workarounds table below.
-
 ### Workarounds in use
 
 | Workaround | Why |
@@ -257,7 +254,6 @@ We can't use Bun 1.2.13 as host either, because OpenCode's monorepo uses `catalo
 | Raw `rt_sigaction`/`rt_sigprocmask` syscalls | Zig's struct layout doesn't match Bionic's; bypass libc entirely |
 | NDK `libc.so` stub linked into `libopentui.so` | Zig doesn't provision Android libc; explicit link needed for `dlopen` symbol resolution |
 | Module graph extracted via trailer, not `process.execPath` | `process.execPath` is unreliable in CI; trailer-based extraction is version-agnostic |
-| `android_mallopt(M_SET_HEAP_TAGGING_LEVEL, NONE)` via `dlsym` constructor | Disables Bionic Scudo heap pointer tagging (TBI) before JSC JIT runs; fixes SIGABRT on Android 12 / Snapdragon 865 (Issue #5) |
 
 ---
 
