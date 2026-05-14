@@ -2008,3 +2008,66 @@ index 7d8ef7c..0d8f40f 100644
  
      // On linux, bun overrides the libc symbols for various functions.
      // This is to compensate for older glibc versions.
+
+--- a/src/sys_uv.zig
++++ b/src/sys_uv.zig
+@@ -326,7 +326,12 @@
+     var req: uv.fs_t = uv.fs_t.uninitialized;
+     defer req.deinit();
+ 
+-    const rc = uv.uv_fs_read(
++    // Android fix (PR#29327 backport): uv_fs_read returns (int)req->result,
++    // truncating ssize_t to int. For reads > INT_MAX bytes the return value
++    // wraps to a negative number that doesn't match any UV error code, causing
++    // rc.errno() to return null and the @intCast below to panic.
++    // Fix: ignore the truncated rc, use req.result (ReturnCodeI64, full i64).
++    _ = uv.uv_fs_read(
+         uv.Loop.get(),
+         &req,
+         uv_fd,
+@@ -341,13 +346,13 @@
+         for (bufs) |buf| {
+             total_bytes += buf.len;
+         }
+-        log("uv read({}, {d} total bytes) = {d} ({any})", .{ uv_fd, total_bytes, rc.int(), debug_timer });
++        log("uv read({}, {d} total bytes) = {d} ({any})", .{ uv_fd, total_bytes, req.result.int(), debug_timer });
+     }
+ 
+-    if (rc.errno()) |errno| {
+-        return .{ .err = .{ .errno = errno, .fd = fd, .syscall = .read } };
++    if (req.result.toError(.read)) |err| {
++        return .{ .err = err.withFd(fd) };
+     } else {
+-        return .{ .result = @as(usize, @intCast(rc.int())) };
++        return .{ .result = @as(usize, @intCast(req.result.int())) };
+     }
+ }
+ 
+@@ -360,7 +365,8 @@
+     var req: uv.fs_t = uv.fs_t.uninitialized;
+     defer req.deinit();
+ 
+-    const rc = uv.uv_fs_write(
++    // Android fix (PR#29327 backport): same ssize_t -> int truncation as preadv.
++    _ = uv.uv_fs_write(
+         uv.Loop.get(),
+         &req,
+         uv_fd,
+@@ -375,13 +381,13 @@
+         for (bufs) |buf| {
+             total_bytes += buf.len;
+         }
+-        log("uv write({}, {d} total bytes) = {d} ({any})", .{ uv_fd, total_bytes, rc.int(), debug_timer });
++        log("uv write({}, {d} total bytes) = {d} ({any})", .{ uv_fd, total_bytes, req.result.int(), debug_timer });
+     }
+ 
+-    if (rc.errno()) |errno| {
+-        return .{ .err = .{ .errno = errno, .fd = fd, .syscall = .write } };
++    if (req.result.toError(.write)) |err| {
++        return .{ .err = err.withFd(fd) };
+     } else {
+-        return .{ .result = @as(usize, @intCast(rc.int())) };
++        return .{ .result = @as(usize, @intCast(req.result.int())) };
+     }
+ }
+ 
