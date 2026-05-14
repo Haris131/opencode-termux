@@ -18,8 +18,13 @@ echo "=== Building libopentui.so for Android aarch64 ==="
 
 # Clone opentui if needed
 if [ ! -d "$OPENTUI_SRC/.git" ]; then
-    echo ">>> Cloning opentui..."
-    git clone --depth 1 --branch "${OPENTUI_TAG}" https://github.com/anomalyco/opentui.git "$OPENTUI_SRC"
+    echo ">>> Cloning opentui at commit ${OPENTUI_COMMIT}..."
+    mkdir -p "$OPENTUI_SRC"
+    cd "$OPENTUI_SRC"
+    git init
+    git remote add origin https://github.com/anomalyco/opentui.git
+    git fetch --depth=1 origin "${OPENTUI_COMMIT}"
+    git checkout FETCH_HEAD
 else
     echo ">>> opentui source exists at $OPENTUI_SRC"
 fi
