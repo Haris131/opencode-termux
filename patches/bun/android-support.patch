@@ -84,7 +84,6 @@ index 67bf951..08212f1 100644
 \ No newline at end of file
 +src/bun.js/bindings/uv-posix-stubs.c
 +src/android_tls_align.c
-+src/android_heap_tagging.c
 \ No newline at end of file
 diff --git a/cmake/CompilerFlags.cmake b/cmake/CompilerFlags.cmake
 index c321c75..142d228 100644
@@ -925,120 +924,6 @@ index 0000000..f801b82
 +    return (void *)_android_tls_align_dummy;
 +}
 +#endif
-diff --git a/src/android_heap_tagging.c b/src/android_heap_tagging.c
-new file mode 100644
-index 0000000..0000000
---- /dev/null
-+++ b/src/android_heap_tagging.c
-@@ -0,0 +1,108 @@
-+/**
-+ * Android Heap Pointer Tagging Disable Shim (v2)
-+ *
-+ * Problem (Issue #5 - Snapdragon 865 / Android 12 / SDK 31):
-+ *
-+ *   On Android 12 (API 31+), Bionic's Scudo allocator enables heap pointer
-+ *   tagging by default on ARM64 devices that support TBI (Top-Byte Ignore).
-+ *   Scudo stores a random 4-bit tag in bits [55:52] of every heap pointer.
-+ *   When JSC's JIT allocator does page-aligned masking (ptr & ~(pageSize-1))
-+ *   or when any code path strips the top byte before passing a pointer to
-+ *   free(), Scudo detects the truncated tag and calls abort():
-+ *
-+ *     F libc: Pointer tag for 0x... was truncated, see
-+ *             https://source.android.com/devices/tech/debug/tagged-pointers
-+ *     fatal signal 6 (SIGABRT)
-+ *
-+ * Root cause (dual mechanism):
-+ *   1. MALLOC/Scudo level: android_mallopt(M_SET_HEAP_TAGGING_LEVEL) disables
-+ *      Scudo's TBI pointer tagging for heap allocations.
-+ *
-+ *   2. Kernel level (TAGGED_ADDR_CTRL): On Android 12 / kernel 5.10+ with
-+ *      AArch64 TBI support, mmap() and other syscalls may also return
-+ *      tagged pointers. JSC JIT uses mmap() for its 32MB code regions.
-+ *      prctl(PR_SET_TAGGED_ADDR_CTRL, 0) disables kernel-level tagged
-+ *      address support for this process. This is the fix needed for
-+ *      Snapdragon 865 (and similar SoCs) where the kernel supports TBI
-+ *      and returns tagged mmap pointers.
-+ *
-+ * Fix:
-+ *   Apply BOTH fixes at constructor priority 101 (before C++ static
-+ *   constructors that initialize JSC/bmalloc).
-+ *
-+ * Reference:
-+ *   https://source.android.com/devices/tech/debug/tagged-pointers
-+ *   https://github.com/guysoft/opencode-termux/issues/5
-+ *   https://android.googlesource.com/platform/bionic/+/refs/heads/main/docs/scudo.md
-+ */
-+
-+#if defined(__ANDROID__) && defined(__aarch64__)
-+
-+#include <dlfcn.h>
-+#include <stddef.h>
-+#include <sys/prctl.h>
-+
-+/* M_SET_HEAP_TAGGING_LEVEL is public NDK API since API 26.
-+ * Define manually for API 24 binary compat (value from bionic source). */
-+#ifndef M_SET_HEAP_TAGGING_LEVEL
-+#define M_SET_HEAP_TAGGING_LEVEL (-204)
-+#endif
-+
-+#ifndef M_HEAP_TAGGING_LEVEL_NONE
-+#define M_HEAP_TAGGING_LEVEL_NONE 0
-+#endif
-+
-+/* PR_SET_TAGGED_ADDR_CTRL / PR_GET_TAGGED_ADDR_CTRL: kernel 5.4+
-+ * Values from linux/prctl.h — may not be in older NDK headers. */
-+#ifndef PR_SET_TAGGED_ADDR_CTRL
-+#define PR_SET_TAGGED_ADDR_CTRL 55
-+#endif
-+#ifndef PR_GET_TAGGED_ADDR_CTRL
-+#define PR_GET_TAGGED_ADDR_CTRL 56
-+#endif
-+#ifndef PR_TAGGED_ADDR_ENABLE
-+#define PR_TAGGED_ADDR_ENABLE   (1UL << 0)
-+#endif
-+
-+typedef int (*android_mallopt_fn)(int opcode, void *arg, size_t arg_size);
-+
-+/**
-+ * Run before main() and before any static C++ constructors (JSC/bmalloc init).
-+ * Constructor priority 101: after libc init (0..100), before user code (65535).
-+ *
-+ * Applies two complementary fixes:
-+ *   1. Disable Scudo heap pointer tagging via android_mallopt()
-+ *   2. Disable kernel tagged address ctrl via prctl(PR_SET_TAGGED_ADDR_CTRL, 0)
-+ */
-+__attribute__((constructor(101)))
-+static void bun_disable_heap_pointer_tagging(void) {
-+    /* --- Fix 1: Scudo/malloc level ---
-+     * Disable Bionic Scudo's TBI pointer tagging for all heap allocations.
-+     * Uses dlsym for API 24 binary compat: android_mallopt() exported from
-+     * libc.so since API 21, public NDK symbol since API 26. */
-+    android_mallopt_fn fn =
-+        (android_mallopt_fn)dlsym(RTLD_DEFAULT, "android_mallopt");
-+    if (fn) {
-+        int level = M_HEAP_TAGGING_LEVEL_NONE;
-+        /* Return value ignored: EINVAL = tagging already disabled or not
-+         * supported by this libc version — both safe. */
-+        fn(M_SET_HEAP_TAGGING_LEVEL, &level, sizeof(level));
-+    }
-+
-+    /* --- Fix 2: Kernel tagged address control ---
-+     * On Linux 5.4+ / Android 12+ (arm64 with TBI), mmap() returns pointers
-+     * with random tags in bits [63:56]. JSC JIT and bmalloc do page-aligned
-+     * arithmetic that strips these bits, causing mismatch when passed to
-+     * munmap()/free(). Disable kernel TBI for this process via prctl.
-+     *
-+     * prctl() with PR_GET_TAGGED_ADDR_CTRL returns EINVAL on kernels that
-+     * don't support it (< 5.4 or TBI disabled at kernel level), so we
-+     * safely ignore failure. Only disable if currently enabled. */
-+    int ctrl = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+    if (ctrl >= 0 && (ctrl & PR_TAGGED_ADDR_ENABLE)) {
-+        /* Disable tagged addr — clear the ENABLE bit */
-+        prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+    }
-+}
-+
-+#endif /* __ANDROID__ && __aarch64__ */
 diff --git a/src/android_tls_align.s b/src/android_tls_align.s
 new file mode 100644
 index 0000000..6ea310b
@@ -2015,39 +1900,3 @@ index 7d8ef7c..0d8f40f 100644
  
      // On linux, bun overrides the libc symbols for various functions.
      // This is to compensate for older glibc versions.
-diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
---- a/src/resolver/resolver.zig
-+++ b/src/resolver/resolver.zig
-@@ -2853,12 +2853,18 @@
-                     // where people try to import from a path containing a file as a parent
-                     // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
-                     // list which contains such paths and treating them as missing means we just
--                    // ignore them during path resolution.
-+                    // ignore them during path resolution. On Android/Termux (non-root), the
-+                    // directories /data/ and /data/data/ cannot be listed by unprivileged
-+                    // processes (EACCES). The resolver walks up from the CWD looking for
-+                    // node_modules, so it will hit these restricted directories. Treat
-+                    // AccessDenied like FileNotFound to prevent spurious error messages.
-                     error.ENOENT,
-                     error.ENOTDIR,
-                     error.IsDir,
-                     error.NotDir,
-                     error.FileNotFound,
-+                    error.EACCES,
-+                    error.AccessDenied,
-                     => return null,
- 
-                     else => {
-@@ -3811,7 +3817,11 @@
-         };
- 
-         if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
--            if (dir_entry.err.original_err != error.ENOENT) {
-+            // On Android/Termux, /data and /data/data return EACCES for
-+            // unprivileged processes -- treat like ENOENT (silently ignore).
-+            if (dir_entry.err.original_err != error.ENOENT and
-+                dir_entry.err.original_err != error.EACCES and
-+                dir_entry.err.original_err != error.AccessDenied) {
-                 r.log.addErrorFmt(
-                     null,
-                     logger.Loc.Empty,
