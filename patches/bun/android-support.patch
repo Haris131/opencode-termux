@@ -925,6 +925,120 @@ index 0000000..f801b82
 +    return (void *)_android_tls_align_dummy;
 +}
 +#endif
+diff --git a/src/android_heap_tagging.c b/src/android_heap_tagging.c
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/android_heap_tagging.c
+@@ -0,0 +1,108 @@
++/**
++ * Android Heap Pointer Tagging Disable Shim (v2)
++ *
++ * Problem (Issue #5 - Snapdragon 865 / Android 12 / SDK 31):
++ *
++ *   On Android 12 (API 31+), Bionic's Scudo allocator enables heap pointer
++ *   tagging by default on ARM64 devices that support TBI (Top-Byte Ignore).
++ *   Scudo stores a random 4-bit tag in bits [55:52] of every heap pointer.
++ *   When JSC's JIT allocator does page-aligned masking (ptr & ~(pageSize-1))
++ *   or when any code path strips the top byte before passing a pointer to
++ *   free(), Scudo detects the truncated tag and calls abort():
++ *
++ *     F libc: Pointer tag for 0x... was truncated, see
++ *             https://source.android.com/devices/tech/debug/tagged-pointers
++ *     fatal signal 6 (SIGABRT)
++ *
++ * Root cause (dual mechanism):
++ *   1. MALLOC/Scudo level: android_mallopt(M_SET_HEAP_TAGGING_LEVEL) disables
++ *      Scudo's TBI pointer tagging for heap allocations.
++ *
++ *   2. Kernel level (TAGGED_ADDR_CTRL): On Android 12 / kernel 5.10+ with
++ *      AArch64 TBI support, mmap() and other syscalls may also return
++ *      tagged pointers. JSC JIT uses mmap() for its 32MB code regions.
++ *      prctl(PR_SET_TAGGED_ADDR_CTRL, 0) disables kernel-level tagged
++ *      address support for this process. This is the fix needed for
++ *      Snapdragon 865 (and similar SoCs) where the kernel supports TBI
++ *      and returns tagged mmap pointers.
++ *
++ * Fix:
++ *   Apply BOTH fixes at constructor priority 101 (before C++ static
++ *   constructors that initialize JSC/bmalloc).
++ *
++ * Reference:
++ *   https://source.android.com/devices/tech/debug/tagged-pointers
++ *   https://github.com/guysoft/opencode-termux/issues/5
++ *   https://android.googlesource.com/platform/bionic/+/refs/heads/main/docs/scudo.md
++ */
++
++#if defined(__ANDROID__) && defined(__aarch64__)
++
++#include <dlfcn.h>
++#include <stddef.h>
++#include <sys/prctl.h>
++
++/* M_SET_HEAP_TAGGING_LEVEL is public NDK API since API 26.
++ * Define manually for API 24 binary compat (value from bionic source). */
++#ifndef M_SET_HEAP_TAGGING_LEVEL
++#define M_SET_HEAP_TAGGING_LEVEL (-204)
++#endif
++
++#ifndef M_HEAP_TAGGING_LEVEL_NONE
++#define M_HEAP_TAGGING_LEVEL_NONE 0
++#endif
++
++/* PR_SET_TAGGED_ADDR_CTRL / PR_GET_TAGGED_ADDR_CTRL: kernel 5.4+
++ * Values from linux/prctl.h — may not be in older NDK headers. */
++#ifndef PR_SET_TAGGED_ADDR_CTRL
++#define PR_SET_TAGGED_ADDR_CTRL 55
++#endif
++#ifndef PR_GET_TAGGED_ADDR_CTRL
++#define PR_GET_TAGGED_ADDR_CTRL 56
++#endif
++#ifndef PR_TAGGED_ADDR_ENABLE
++#define PR_TAGGED_ADDR_ENABLE   (1UL << 0)
++#endif
++
++typedef int (*android_mallopt_fn)(int opcode, void *arg, size_t arg_size);
++
++/**
++ * Run before main() and before any static C++ constructors (JSC/bmalloc init).
++ * Constructor priority 101: after libc init (0..100), before user code (65535).
++ *
++ * Applies two complementary fixes:
++ *   1. Disable Scudo heap pointer tagging via android_mallopt()
++ *   2. Disable kernel tagged address ctrl via prctl(PR_SET_TAGGED_ADDR_CTRL, 0)
++ */
++__attribute__((constructor(101)))
++static void bun_disable_heap_pointer_tagging(void) {
++    /* --- Fix 1: Scudo/malloc level ---
++     * Disable Bionic Scudo's TBI pointer tagging for all heap allocations.
++     * Uses dlsym for API 24 binary compat: android_mallopt() exported from
++     * libc.so since API 21, public NDK symbol since API 26. */
++    android_mallopt_fn fn =
++        (android_mallopt_fn)dlsym(RTLD_DEFAULT, "android_mallopt");
++    if (fn) {
++        int level = M_HEAP_TAGGING_LEVEL_NONE;
++        /* Return value ignored: EINVAL = tagging already disabled or not
++         * supported by this libc version — both safe. */
++        fn(M_SET_HEAP_TAGGING_LEVEL, &level, sizeof(level));
++    }
++
++    /* --- Fix 2: Kernel tagged address control ---
++     * On Linux 5.4+ / Android 12+ (arm64 with TBI), mmap() returns pointers
++     * with random tags in bits [63:56]. JSC JIT and bmalloc do page-aligned
++     * arithmetic that strips these bits, causing mismatch when passed to
++     * munmap()/free(). Disable kernel TBI for this process via prctl.
++     *
++     * prctl() with PR_GET_TAGGED_ADDR_CTRL returns EINVAL on kernels that
++     * don't support it (< 5.4 or TBI disabled at kernel level), so we
++     * safely ignore failure. Only disable if currently enabled. */
++    int ctrl = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++    if (ctrl >= 0 && (ctrl & PR_TAGGED_ADDR_ENABLE)) {
++        /* Disable tagged addr — clear the ENABLE bit */
++        prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++    }
++}
++
++#endif /* __ANDROID__ && __aarch64__ */
 diff --git a/src/android_tls_align.s b/src/android_tls_align.s
 new file mode 100644
 index 0000000..6ea310b
@@ -958,107 +1072,11 @@ index 0000000..6ea310b
 +.size _android_tls_align_force,64
 +_android_tls_align_force:
 +.zero 64
-diff --git a/src/android_heap_tagging.c b/src/android_heap_tagging.c
-new file mode 100644
-index 0000000..0000000
---- /dev/null
-+++ b/src/android_heap_tagging.c
-@@ -0,0 +1,89 @@
-+/**
-+ * Android Heap Pointer Tagging Disable Shim
-+ *
-+ * Problem (Issue #5 - Snapdragon 865 / Android 12 / SDK 31):
-+ *
-+ *   On Android 12 (API 31+), Bionic's Scudo allocator enables heap pointer
-+ *   tagging by default on ARM64 devices that support TBI (Top-Byte Ignore).
-+ *   Scudo stores a random 4-bit tag in bits [55:52] of every heap pointer.
-+ *   When JSC's JIT allocator does page-aligned masking (ptr & ~(pageSize-1))
-+ *   or when any code path strips the top byte before passing a pointer to
-+ *   free(), Scudo detects the truncated tag and calls abort():
-+ *
-+ *     F libc: Pointer tag for 0x... was truncated, see
-+ *             https://source.android.com/devices/tech/debug/tagged-pointers
-+ *     fatal signal 6 (SIGABRT)
-+ *
-+ * Root cause (dual mechanism):
-+ *   1. MALLOC/Scudo level: android_mallopt(M_SET_HEAP_TAGGING_LEVEL) disables
-+ *      Scudo's TBI pointer tagging for heap allocations.
-+ *
-+ *   2. Kernel level (TAGGED_ADDR_CTRL): On Android 12 / kernel 5.10+ with
-+ *      AArch64 TBI support, mmap() and other syscalls may also return
-+ *      tagged pointers. JSC JIT uses mmap() for its 32MB code regions.
-+ *      prctl(PR_SET_TAGGED_ADDR_CTRL, 0) disables kernel-level tagged
-+ *      address support for this process.
-+ *
-+ * Fix:
-+ *   Apply BOTH fixes at constructor priority 101 (before C++ static
-+ *   constructors that initialize JSC/bmalloc).
-+ */
-+
-+#if defined(__ANDROID__) && defined(__aarch64__)
-+
-+#include <dlfcn.h>
-+#include <stddef.h>
-+#include <sys/prctl.h>
-+
-+#ifndef M_SET_HEAP_TAGGING_LEVEL
-+#define M_SET_HEAP_TAGGING_LEVEL (-204)
-+#endif
-+
-+#ifndef M_HEAP_TAGGING_LEVEL_NONE
-+#define M_HEAP_TAGGING_LEVEL_NONE 0
-+#endif
-+
-+#ifndef PR_SET_TAGGED_ADDR_CTRL
-+#define PR_SET_TAGGED_ADDR_CTRL 55
-+#endif
-+#ifndef PR_GET_TAGGED_ADDR_CTRL
-+#define PR_GET_TAGGED_ADDR_CTRL 56
-+#endif
-+#ifndef PR_TAGGED_ADDR_ENABLE
-+#define PR_TAGGED_ADDR_ENABLE   (1UL << 0)
-+#endif
-+
-+typedef int (*android_mallopt_fn)(int opcode, void *arg, size_t arg_size);
-+
-+/**
-+ * Run before main() and before any static C++ constructors (JSC/bmalloc init).
-+ * Constructor priority 101: after libc init (0..100), before user code (65535).
-+ */
-+__attribute__((constructor(101)))
-+static void bun_disable_heap_pointer_tagging(void) {
-+    /* --- Fix 1: Scudo/malloc level --- */
-+    android_mallopt_fn fn =
-+        (android_mallopt_fn)dlsym(RTLD_DEFAULT, "android_mallopt");
-+    if (fn) {
-+        int level = M_HEAP_TAGGING_LEVEL_NONE;
-+        fn(M_SET_HEAP_TAGGING_LEVEL, &level, sizeof(level));
-+    }
-+
-+    /* --- Fix 1b: mallopt(-204, 0) fallback for Android 13+ --- */
-+#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
-+#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
-+#endif
-+    typedef int (*mallopt_fn)(int, int);
-+    mallopt_fn mallopt_sym = (mallopt_fn)dlsym(RTLD_DEFAULT, "mallopt");
-+    if (mallopt_sym) {
-+        mallopt_sym(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
-+    }
-+
-+    /* --- Fix 2: Kernel tagged address control --- */
-+    int ctrl = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+    if (ctrl >= 0 && (ctrl & PR_TAGGED_ADDR_ENABLE)) {
-+        prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+    }
-+}
-+
-+#endif /* __ANDROID__ && __aarch64__ */
-\ No newline at end of file
 diff --git a/src/bun.js/bindings/ZigGlobalObject.cpp b/src/bun.js/bindings/ZigGlobalObject.cpp
 index 5e534e5..e60230d 100644
 --- a/src/bun.js/bindings/ZigGlobalObject.cpp
 +++ b/src/bun.js/bindings/ZigGlobalObject.cpp
-@@ -275,20 +275,44 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -275,20 +275,35 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
      }
  #endif
  
@@ -1072,13 +1090,9 @@ index 5e534e5..e60230d 100644
 +    // Options API because JSC::initialize() -> Options::initialize() resets
 +    // ALL options to their defaults before reading env vars. Setting options
 +    // via the API before JSC::initialize() has no effect.
-+    setenv("JSC_usePollingTraps", "true", 1);
-+    setenv("JSC_useWasmFaultSignalHandler", "false", 1);
-+    setenv("JSC_useWasmFastMemory", "false", 1);
-+    // Matikan concurrent JIT: background JIT thread crash di Android
-+    setenv("JSC_useConcurrentJIT", "false", 1);
-+    // Matikan DFG/FTL JIT yang butuh signal handler
-+    setenv("JSC_useDFGJIT", "false", 1);
++    setenv("JSC_usePollingTraps", "true", 0);
++    setenv("JSC_useWasmFaultSignalHandler", "false", 0);
++    setenv("JSC_useWasmFastMemory", "false", 0);
 +#endif
 +
      JSC::initialize();
@@ -1086,12 +1100,7 @@ index 5e534e5..e60230d 100644
  
          JSC::Options::AllowUnfinalizedAccessScope scope;
  
-+#if defined(__ANDROID__)
-+        // Android: concurrent JIT crashes because debuggerd intercepts signals
-+        JSC::Options::useConcurrentJIT() = false;
-+#else
          JSC::Options::useConcurrentJIT() = true;
-+#endif
 +        JSC::Options::useJIT() = true;
 +        JSC::Options::useBBQJIT() = true;
          // JSC::Options::useSigillCrashAnalyzer() = true;
@@ -1105,7 +1114,7 @@ index 5e534e5..e60230d 100644
          JSC::Options::useJITCage() = false;
          JSC::Options::useShadowRealm() = true;
          JSC::Options::useV8DateParser() = true;
-@@ -298,6 +313,17 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -298,6 +313,15 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
          JSC::Options::heapGrowthMaxIncrease() = 2.0;
          JSC::dangerouslyOverrideJSCBytecodeCacheVersion(getWebKitBytecodeCacheVersion());
  
@@ -1116,8 +1125,6 @@ index 5e534e5..e60230d 100644
 +        JSC::Options::usePollingTraps() = true;
 +        JSC::Options::useWasmFaultSignalHandler() = false;
 +        JSC::Options::useWasmFastMemory() = false;
-+        JSC::Options::useConcurrentJIT() = false;
-+        JSC::Options::useDFGJIT() = false;
 +#endif
 +
  #ifdef BUN_DEBUG
@@ -2008,66 +2015,39 @@ index 7d8ef7c..0d8f40f 100644
  
      // On linux, bun overrides the libc symbols for various functions.
      // This is to compensate for older glibc versions.
-
---- a/src/sys_uv.zig
-+++ b/src/sys_uv.zig
-@@ -326,7 +326,12 @@
-     var req: uv.fs_t = uv.fs_t.uninitialized;
-     defer req.deinit();
+diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
+--- a/src/resolver/resolver.zig
++++ b/src/resolver/resolver.zig
+@@ -2853,12 +2853,18 @@
+                     // where people try to import from a path containing a file as a parent
+                     // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
+                     // list which contains such paths and treating them as missing means we just
+-                    // ignore them during path resolution.
++                    // ignore them during path resolution. On Android/Termux (non-root), the
++                    // directories /data/ and /data/data/ cannot be listed by unprivileged
++                    // processes (EACCES). The resolver walks up from the CWD looking for
++                    // node_modules, so it will hit these restricted directories. Treat
++                    // AccessDenied like FileNotFound to prevent spurious error messages.
+                     error.ENOENT,
+                     error.ENOTDIR,
+                     error.IsDir,
+                     error.NotDir,
+                     error.FileNotFound,
++                    error.EACCES,
++                    error.AccessDenied,
+                     => return null,
  
--    const rc = uv.uv_fs_read(
-+    // Android fix (PR#29327 backport): uv_fs_read returns (int)req->result,
-+    // truncating ssize_t to int. For reads > INT_MAX bytes the return value
-+    // wraps to a negative number that doesn't match any UV error code, causing
-+    // rc.errno() to return null and the @intCast below to panic.
-+    // Fix: ignore the truncated rc, use req.result (ReturnCodeI64, full i64).
-+    _ = uv.uv_fs_read(
-         uv.Loop.get(),
-         &req,
-         uv_fd,
-@@ -341,13 +346,13 @@
-         for (bufs) |buf| {
-             total_bytes += buf.len;
-         }
--        log("uv read({}, {d} total bytes) = {d} ({any})", .{ uv_fd, total_bytes, rc.int(), debug_timer });
-+        log("uv read({}, {d} total bytes) = {d} ({any})", .{ uv_fd, total_bytes, req.result.int(), debug_timer });
-     }
+                     else => {
+@@ -3811,7 +3817,11 @@
+         };
  
--    if (rc.errno()) |errno| {
--        return .{ .err = .{ .errno = errno, .fd = fd, .syscall = .read } };
-+    if (req.result.toError(.read)) |err| {
-+        return .{ .err = err.withFd(fd) };
-     } else {
--        return .{ .result = @as(usize, @intCast(rc.int())) };
-+        return .{ .result = @as(usize, @intCast(req.result.int())) };
-     }
- }
- 
-@@ -360,7 +365,8 @@
-     var req: uv.fs_t = uv.fs_t.uninitialized;
-     defer req.deinit();
- 
--    const rc = uv.uv_fs_write(
-+    // Android fix (PR#29327 backport): same ssize_t -> int truncation as preadv.
-+    _ = uv.uv_fs_write(
-         uv.Loop.get(),
-         &req,
-         uv_fd,
-@@ -375,13 +381,13 @@
-         for (bufs) |buf| {
-             total_bytes += buf.len;
-         }
--        log("uv write({}, {d} total bytes) = {d} ({any})", .{ uv_fd, total_bytes, rc.int(), debug_timer });
-+        log("uv write({}, {d} total bytes) = {d} ({any})", .{ uv_fd, total_bytes, req.result.int(), debug_timer });
-     }
- 
--    if (rc.errno()) |errno| {
--        return .{ .err = .{ .errno = errno, .fd = fd, .syscall = .write } };
-+    if (req.result.toError(.write)) |err| {
-+        return .{ .err = err.withFd(fd) };
-     } else {
--        return .{ .result = @as(usize, @intCast(rc.int())) };
-+        return .{ .result = @as(usize, @intCast(req.result.int())) };
-     }
- }
- 
+         if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
+-            if (dir_entry.err.original_err != error.ENOENT) {
++            // On Android/Termux, /data and /data/data return EACCES for
++            // unprivileged processes -- treat like ENOENT (silently ignore).
++            if (dir_entry.err.original_err != error.ENOENT and
++                dir_entry.err.original_err != error.EACCES and
++                dir_entry.err.original_err != error.AccessDenied) {
+                 r.log.addErrorFmt(
+                     null,
+                     logger.Loc.Empty,
