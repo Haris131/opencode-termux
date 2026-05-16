@@ -887,6 +887,115 @@ index 267d1f8..dcc64b7 100644
          };
  
          _ = string_builder.append(std.mem.asBytes(&offsets));
+diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
+new file mode 100644
+index 0000000..e552e56
+--- /dev/null
++++ b/src/android_disable_tags.c
+@@ -0,0 +1,103 @@
++/*
++ * android_disable_tags.c
++ *
++ * Built-in workaround for Android tagged pointer (TBI/MTE) crashes.
++ * Uses .preinit_array to run BEFORE any constructors or C runtime init,
++ * ensuring tagged pointers are disabled before ANY allocations occur.
++ *
++ * The "Pointer tag for 0x... was truncated" SIGABRT occurs because:
++ * 1. Android 11+ enables Top-byte Ignore (TBI) pointer tagging on ARM64
++ * 2. JSC JIT allocates large mmap regions (32MB+) that get tagged
++ * 3. Bun's Zig code doesn't handle tagged pointers
++ * 4. When tagged pointers reach syscalls, kernel strips tags causing
++ *    scudo allocator to detect tag mismatch and abort
++ *
++ * This file is compiled and linked into the Bun binary for Android.
++ */
++
++#if defined(__ANDROID__) && defined(__aarch64__)
++
++#include <sys/mman.h>
++#include <sys/prctl.h>
++#include <sys/syscall.h>
++#include <unistd.h>
++#include <errno.h>
++
++#ifndef PR_SET_TAGGED_ADDR_CTRL
++#define PR_SET_TAGGED_ADDR_CTRL 55
++#endif
++#ifndef PR_GET_TAGGED_ADDR_CTRL
++#define PR_GET_TAGGED_ADDR_CTRL 56
++#endif
++#ifndef PR_TAGGED_ADDR_ENABLE
++#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
++#endif
++#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
++#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
++#endif
++#ifndef M_HEAP_TAGGING_LEVEL_NONE
++#define M_HEAP_TAGGING_LEVEL_NONE 0
++#endif
++
++/* Strip top byte (tag bits 56-63) from ARM64 pointer */
++static inline void *strip_tag(void *p) {
++    return (void *)((unsigned long)p & 0x00FFFFFFFFFFFFFFUL);
++}
++
++/*
++ * Direct syscall wrapper for mmap — bypasses libc entirely.
++ * This is needed because libc's mmap may already return tagged pointers
++ * before our preinit runs.
++ */
++static inline void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
++    long ret = syscall(SYS_mmap2, addr, length, prot, flags, fd, offset >> 12);
++    if ((unsigned long)ret >= (unsigned long)-4096) {
++        return MAP_FAILED;
++    }
++    return (void *)ret;
++}
++
++/*
++ * Preinit function — runs BEFORE .init_array constructors and C runtime.
++ * This is the earliest possible point in process startup where we can
++ * execute code. We disable tagged pointers here before any allocations.
++ */
++static void __disable_tagged_pointers_early(void) {
++    /* 1. Disable kernel-level tagged address ABI */
++    prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++
++    /* 2. Disable heap tagging in scudo via mallopt */
++    /* mallopt is available early because it's a simple libc function */
++    extern int mallopt(int, int);
++    mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
++}
++
++/*
++ * Place function pointer in .preinit_array section.
++ * The linker processes .preinit_array BEFORE .init_array (constructors).
++ * This ensures our fix runs before any C++ global constructors or
++ * Bun initialization code.
++ */
++__attribute__((section(".preinit_array"), used))
++static void (*__preinit_disable_tagged_pointers)(void) = __disable_tagged_pointers_early;
++
++/*
++ * Intercept mmap to strip tags from return values.
++ * This catches any mmap calls that happen after preinit but before
++ * the main code runs.
++ */
++__attribute__((visibility("default")))
++void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
++    void *result = sys_mmap(addr, length, prot, flags, fd, offset);
++    if (result != MAP_FAILED) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++__attribute__((visibility("default")))
++void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
++    return mmap(addr, length, prot, flags, fd, offset);
++}
++
++#endif /* __ANDROID__ && __aarch64__ */
 diff --git a/src/android_tls_align.c b/src/android_tls_align.c
 new file mode 100644
 index 0000000..f801b82
@@ -1994,130 +2103,3 @@ index 7d8ef7c..0d8f40f 100644
  
      // On linux, bun overrides the libc symbols for various functions.
      // This is to compensate for older glibc versions.
-diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
-new file mode 100644
-index 0000000..a1b2c3d
---- /dev/null
-+++ b/src/android_disable_tags.c
-@@ -0,0 +1,121 @@
-+/*
-+ * android_disable_tags.c
-+ *
-+ * Built-in workaround for Android tagged pointer (TBI/MTE) crashes.
-+ * Runs as an early constructor to disable tagged pointers BEFORE any
-+ * Bun allocations occur, eliminating the need for LD_PRELOAD.
-+ *
-+ * The "Pointer tag for 0x... was truncated" SIGABRT occurs because:
-+ * 1. Android 11+ enables Top-byte Ignore (TBI) pointer tagging on ARM64
-+ * 2. JSC JIT allocates large mmap regions (32MB+) that get tagged
-+ * 3. Bun's Zig code doesn't handle tagged pointers
-+ * 4. When tagged pointers reach syscalls, kernel strips tags causing
-+ *    scudo allocator to detect tag mismatch and abort
-+ *
-+ * This file is compiled and linked into the Bun binary for Android.
-+ */
-+
-+#if defined(__ANDROID__) && defined(__aarch64__)
-+
-+#include <dlfcn.h>
-+#include <sys/mman.h>
-+#include <sys/prctl.h>
-+#include <unistd.h>
-+#include <errno.h>
-+
-+#ifndef PR_SET_TAGGED_ADDR_CTRL
-+#define PR_SET_TAGGED_ADDR_CTRL 55
-+#endif
-+#ifndef PR_GET_TAGGED_ADDR_CTRL
-+#define PR_GET_TAGGED_ADDR_CTRL 56
-+#endif
-+#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
-+#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
-+#endif
-+#ifndef M_HEAP_TAGGING_LEVEL_NONE
-+#define M_HEAP_TAGGING_LEVEL_NONE 0
-+#endif
-+
-+/* Strip top byte (tag bits 56-63) from ARM64 pointer */
-+static inline void *strip_tag(void *p) {
-+    return (void *)((unsigned long)p & 0x00FFFFFFFFFFFFFFUL);
-+}
-+
-+/* Real mmap function pointers — initialized in constructor */
-+static void *(*real_mmap)(void *, size_t, int, int, int, off_t);
-+static void *(*real_mmap64)(void *, size_t, int, int, int, off64_t);
-+
-+/*
-+ * Intercept mmap: call real mmap, then strip tag from result.
-+ * This ensures Bun's Zig code receives untagged pointers.
-+ */
-+__attribute__((visibility("default")))
-+void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-+    void *result = real_mmap(addr, length, prot, flags, fd, offset);
-+    if (result != MAP_FAILED) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
-+    void *result = real_mmap64(addr, length, prot, flags, fd, offset);
-+    if (result != MAP_FAILED) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+static void disable_tagged_addresses(void) {
-+    /*
-+     * Disable kernel-level tagged address ABI for this thread.
-+     * Prevents the kernel from stripping tags on syscalls.
-+     */
-+    long ret = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+    if (ret >= 0) {
-+        prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+    }
-+}
-+
-+static void disable_heap_tagging(void) {
-+    /*
-+     * Disable heap-level pointer tagging in Bionic's scudo allocator.
-+     */
-+    void *libc = dlopen("libc.so", RTLD_NOW);
-+    if (!libc) return;
-+
-+    int (*mallopt_fn)(int, int) = dlsym(libc, "mallopt");
-+    if (mallopt_fn) {
-+        mallopt_fn(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
-+    }
-+
-+    int (*android_mallopt_fn)(int, void *, size_t) = dlsym(libc, "android_mallopt");
-+    if (android_mallopt_fn) {
-+        int level = M_HEAP_TAGGING_LEVEL_NONE;
-+        android_mallopt_fn(8, &level, sizeof(level));
-+    }
-+    dlclose(libc);
-+}
-+
-+/*
-+ * Constructor with priority 101 to run as early as possible.
-+ * Priority 100 is reserved for the dynamic linker's own init.
-+ *
-+ * This runs BEFORE main() and before any other constructors,
-+ * ensuring tagged pointers are disabled before Bun allocates memory.
-+ */
-+void __attribute__((constructor(101))) android_disable_tagged_pointers(void) {
-+    /*
-+     * Initialize real mmap function pointers FIRST, before any
-+     * other initialization that might trigger mmap calls.
-+     */
-+    real_mmap = dlsym(RTLD_NEXT, "mmap");
-+    real_mmap64 = dlsym(RTLD_NEXT, "mmap64");
-+
-+    /* Then disable tagged pointers */
-+    disable_tagged_addresses();
-+    disable_heap_tagging();
-+}
-+
-+#endif /* __ANDROID__ && __aarch64__ */
