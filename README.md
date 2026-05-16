@@ -122,7 +122,7 @@ With warm caches (WebKit + Bun cached), CI runs complete in ~4 minutes.
 
 ## What Was Patched and Why
 
-### Bun Patches (33 files modified, 2 new files)
+### Bun Patches (35 files modified, 4 new files)
 
 Bun has zero Android support. Every patch falls into one of these categories:
 
