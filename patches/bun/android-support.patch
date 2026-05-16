@@ -83,8 +83,7 @@ index 67bf951..08212f1 100644
 -src/bun.js/bindings/uv-posix-stubs.c
 \ No newline at end of file
 +src/bun.js/bindings/uv-posix-stubs.c
-+src/android_disable_tags.c
- src/android_tls_align.c
++src/android_tls_align.c
 \ No newline at end of file
 diff --git a/cmake/CompilerFlags.cmake b/cmake/CompilerFlags.cmake
 index c321c75..142d228 100644
@@ -1165,9 +1164,18 @@ index daa0f78..39c021b 100644
  
  #endif
 diff --git a/src/bun.js/node/node_fs.zig b/src/bun.js/node/node_fs.zig
-index 1fa1bd7..49696df 100644
+index 1fa1bd7..53dac4f 100644
 --- a/src/bun.js/node/node_fs.zig
 +++ b/src/bun.js/node/node_fs.zig
+@@ -3417,7 +3417,7 @@ pub const NodeFS = struct {
+     pub fn uv_close(_: *NodeFS, args: Arguments.Close, rc: i64) Maybe(Return.Close) {
+         if (rc < 0) {
+             return Maybe(Return.Close){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .close,
+                 .fd = args.fd,
+                 .from_libuv = true,
 @@ -3864,6 +3864,11 @@ pub const NodeFS = struct {
              return Maybe(Return.Lchmod).todo();
          }
@@ -1180,6 +1188,91 @@ index 1fa1bd7..49696df 100644
          const path = args.path.sliceZ(&this.sync_error_buf);
          return Maybe(Return.Lchmod).errnoSysP(c.lchmod(path, @truncate(args.mode)), .lchmod, path) orelse
              Maybe(Return.Lchmod).success;
+@@ -4190,19 +4195,19 @@ pub const NodeFS = struct {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Open){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .open,
+                 .path = args.path.slice(),
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Open).initResult(.fromUV(@intCast(rc)));
++        return Maybe(Return.Open).initResult(.fromUV(@truncate(rc)));
+     }
+ 
+     pub fn uv_statfs(_: *NodeFS, args: Arguments.StatFS, req: *uv.fs_t, rc: i64) Maybe(Return.StatFS) {
+         if (rc < 0) {
+             return Maybe(Return.StatFS){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .open,
+                 .path = args.path.slice(),
+                 .from_libuv = true,
+@@ -4263,26 +4268,26 @@ pub const NodeFS = struct {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Read){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .read,
+                 .fd = args.fd,
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Read).initResult(.{ .bytes_read = @intCast(rc) });
++        return Maybe(Return.Read).initResult(.{ .bytes_read = @truncate(rc) });
+     }
+ 
+     pub fn uv_readv(this: *NodeFS, args: Arguments.Readv, rc: i64) Maybe(Return.Readv) {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Readv){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .readv,
+                 .fd = args.fd,
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Readv).initResult(.{ .bytes_read = @intCast(rc) });
++        return Maybe(Return.Readv).initResult(.{ .bytes_read = @truncate(rc) });
+     }
+ 
+     pub fn readv(this: *NodeFS, args: Arguments.Readv, _: Flavor) Maybe(Return.Readv) {
+@@ -4307,26 +4312,26 @@ pub const NodeFS = struct {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Write){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .write,
+                 .fd = args.fd,
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Write).initResult(.{ .bytes_written = @intCast(rc) });
++        return Maybe(Return.Write).initResult(.{ .bytes_written = @truncate(rc) });
+     }
+ 
+     pub fn uv_writev(this: *NodeFS, args: Arguments.Writev, rc: i64) Maybe(Return.Writev) {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Writev){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .writev,
+                 .fd = args.fd,
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Writev).initResult(.{ .bytes_written = @intCast(rc) });
++        return Maybe(Return.Writev).initResult(.{ .bytes_written = @truncate(rc) });
+     }
+ 
+     fn writeInner(_: *NodeFS, args: Arguments.Write) Maybe(Return.Write) {
 diff --git a/src/bun.js/node/node_os.zig b/src/bun.js/node/node_os.zig
 index f5790e3..4fadcc0 100644
 --- a/src/bun.js/node/node_os.zig
@@ -1823,46 +1916,6 @@ index 4187c86..51669c0 100644
      return @bitCast(
          std.os.linux.syscall6(
              .epoll_pwait2,
-diff --git a/src/sys_uv.zig b/src/sys_uv.zig
-index 1a2b3c4..5d6e7f8 100644
---- a/src/sys_uv.zig
-+++ b/src/sys_uv.zig
-@@ -331,7 +331,7 @@ pub fn preadv(fd: FileDescriptor, bufs: []const bun.PlatformIOVec, position: i64) Maybe(usize) {
-         &req,
-         uv_fd,
-         bufs.ptr,
--        @intCast(bufs.len),
-+        @truncate(bufs.len),
-         position,
-         null,
-     );
-@@ -347,7 +347,7 @@ pub fn preadv(fd: FileDescriptor, bufs: []const bun.PlatformIOVec, position: i64) Maybe(usize) {
-     if (rc.errno()) |errno| {
-         return .{ .err = .{ .errno = errno, .fd = fd, .syscall = .read } };
-     } else {
--        return .{ .result = @as(usize, @intCast(rc.int())) };
-+        return .{ .result = @as(usize, @truncate(rc.int())) };
-     }
- }
- 
-@@ -365,7 +365,7 @@ pub fn pwritev(fd: FileDescriptor, bufs: []const bun.PlatformIOVecConst, position: i64) Maybe(usize) {
-         &req,
-         uv_fd,
-         bufs.ptr,
--        @intCast(bufs.len),
-+        @truncate(bufs.len),
-         position,
-         null,
-     );
-@@ -381,7 +381,7 @@ pub fn pwritev(fd: FileDescriptor, bufs: []const bun.PlatformIOVecConst, position: i64) Maybe(usize) {
-     if (rc.errno()) |errno| {
-         return .{ .err = .{ .errno = errno, .fd = fd, .syscall = .write } };
-     } else {
--        return .{ .result = @as(usize, @intCast(rc.int())) };
-+        return .{ .result = @as(usize, @truncate(rc.int())) };
-     }
- }
-
 diff --git a/src/sys.zig b/src/sys.zig
 index 5f14200..5d94cc7 100644
 --- a/src/sys.zig
@@ -1943,7 +1996,7 @@ index 7d8ef7c..0d8f40f 100644
      // This is to compensate for older glibc versions.
 diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
 new file mode 100644
-index 0000000..0000000
+index 0000000..a1b2c3d
 --- /dev/null
 +++ b/src/android_disable_tags.c
 @@ -0,0 +1,121 @@
