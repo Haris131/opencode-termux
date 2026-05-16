@@ -82,7 +82,7 @@ index 67bf951..08212f1 100644
  src/bun.js/bindings/uv-posix-polyfills.c
 -src/bun.js/bindings/uv-posix-stubs.c
 \ No newline at end of file
-+ src/bun.js/bindings/uv-posix-stubs.c
++src/bun.js/bindings/uv-posix-stubs.c
 +src/android_disable_tags.c
  src/android_tls_align.c
 \ No newline at end of file
