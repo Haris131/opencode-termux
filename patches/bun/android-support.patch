@@ -890,10 +890,10 @@ index 267d1f8..dcc64b7 100644
          _ = string_builder.append(std.mem.asBytes(&offsets));
 diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
 new file mode 100644
-index 0000000..67fc0eb
+index 0000000..657ec12
 --- /dev/null
 +++ b/src/android_disable_tags.c
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,202 @@
 +/*
 + * android_disable_tags.c
 + *
@@ -908,12 +908,18 @@ index 0000000..67fc0eb
 + * 4. When tagged pointers reach syscalls, kernel strips tags causing
 + *    scudo allocator to detect tag mismatch and abort
 + *
++ * The "incorrect alignment" panic occurs because:
++ * - Aligned allocations (posix_memalign, aligned_alloc) return tagged pointers
++ * - Zig's @alignCast runtime check fails on tagged pointers stored in
++ *   libuv callback data or mmap'd regions
++ *
 + * This file is compiled and linked into the Bun binary for Android.
 + */
 +
 +#if defined(__ANDROID__) && defined(__aarch64__)
 +
 +#include <dlfcn.h>
++#include <stdlib.h>
 +#include <sys/mman.h>
 +#include <sys/prctl.h>
 +#include <unistd.h>
@@ -937,13 +943,18 @@ index 0000000..67fc0eb
 +    return (void *)((unsigned long)p & 0x00FFFFFFFFFFFFFFUL);
 +}
 +
-+/* Real mmap function pointers — initialized in constructor */
++/* Real function pointers — initialized in constructor */
 +static void *(*real_mmap)(void *, size_t, int, int, int, off_t);
 +static void *(*real_mmap64)(void *, size_t, int, int, int, off64_t);
++static int (*real_posix_memalign)(void **, size_t, size_t);
++static void *(*real_aligned_alloc)(size_t, size_t);
++static void *(*real_memalign)(size_t, size_t);
++static void *(*real_malloc)(size_t);
++static void *(*real_calloc)(size_t, size_t);
++static void *(*real_realloc)(void *, size_t);
 +
 +/*
 + * Intercept mmap: call real mmap, then strip tag from result.
-+ * This ensures Bun's Zig code receives untagged pointers.
 + */
 +__attribute__((visibility("default")))
 +void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
@@ -958,6 +969,70 @@ index 0000000..67fc0eb
 +void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
 +    void *result = real_mmap64(addr, length, prot, flags, fd, offset);
 +    if (result != MAP_FAILED) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++/*
++ * Intercept aligned allocations — critical for Zig @alignCast safety.
++ * These functions return pointers with specific alignment guarantees.
++ * If the pointer is tagged, Zig's runtime alignment check fails.
++ */
++__attribute__((visibility("default")))
++int posix_memalign(void **memptr, size_t alignment, size_t size) {
++    int ret = real_posix_memalign(memptr, alignment, size);
++    if (ret == 0 && *memptr != NULL) {
++        *memptr = strip_tag(*memptr);
++    }
++    return ret;
++}
++
++__attribute__((visibility("default")))
++void *aligned_alloc(size_t alignment, size_t size) {
++    void *result = real_aligned_alloc(alignment, size);
++    if (result != NULL) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++__attribute__((visibility("default")))
++void *memalign(size_t alignment, size_t size) {
++    void *result = real_memalign(alignment, size);
++    if (result != NULL) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++/*
++ * Intercept general allocations — prevent tagged pointers from
++ * entering libuv callback data and other critical paths.
++ */
++__attribute__((visibility("default")))
++void *malloc(size_t size) {
++    void *result = real_malloc(size);
++    if (result != NULL) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++__attribute__((visibility("default")))
++void *calloc(size_t nmemb, size_t size) {
++    void *result = real_calloc(nmemb, size);
++    if (result != NULL) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++__attribute__((visibility("default")))
++void *realloc(void *ptr, size_t size) {
++    if (ptr) ptr = strip_tag(ptr);
++    void *result = real_realloc(ptr, size);
++    if (result != NULL) {
 +        result = strip_tag(result);
 +    }
 +    return result;
@@ -1003,11 +1078,17 @@ index 0000000..67fc0eb
 + */
 +void __attribute__((constructor(101))) android_disable_tagged_pointers(void) {
 +    /*
-+     * Initialize real mmap function pointers FIRST, before any
-+     * other initialization that might trigger mmap calls.
++     * Initialize real function pointers FIRST, before any
++     * other initialization that might trigger allocation calls.
 +     */
 +    real_mmap = dlsym(RTLD_NEXT, "mmap");
 +    real_mmap64 = dlsym(RTLD_NEXT, "mmap64");
++    real_posix_memalign = dlsym(RTLD_NEXT, "posix_memalign");
++    real_aligned_alloc = dlsym(RTLD_NEXT, "aligned_alloc");
++    real_memalign = dlsym(RTLD_NEXT, "memalign");
++    real_malloc = dlsym(RTLD_NEXT, "malloc");
++    real_calloc = dlsym(RTLD_NEXT, "calloc");
++    real_realloc = dlsym(RTLD_NEXT, "realloc");
 +
 +    /* Then disable tagged pointers */
 +    disable_tagged_addresses();
