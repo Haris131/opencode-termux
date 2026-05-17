@@ -877,18 +877,16 @@ index 267d1f8..dcc64b7 100644
 
 diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
 new file mode 100644
-index 0000000..f1e2d3c
+index 0000000..a1b2c3d
 --- /dev/null
 +++ b/src/android_disable_tags.c
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,134 @@
 +/*
 + * android_disable_tags.c
 + *
 + * Built-in workaround for Android tagged pointer (TBI/MTE) crashes.
-+ * Multi-layer defense:
-+ *   1. .preinit_array: Disable kernel tagged pointer ABI (runs first)
-+ *   2. constructor(101): Disable heap tagging + resolve real mmap
-+ *   3. mmap/mmap64 interceptors: Strip tags from all returned pointers
++ * Runs as an early constructor to disable tagged pointers BEFORE any
++ * Bun allocations occur, eliminating the need for LD_PRELOAD.
 + *
 + * The "Pointer tag for 0x... was truncated" SIGABRT occurs because:
 + * 1. Android 11+ enables Top-byte Ignore (TBI) pointer tagging on ARM64
@@ -915,9 +913,6 @@ index 0000000..f1e2d3c
 +#ifndef PR_GET_TAGGED_ADDR_CTRL
 +#define PR_GET_TAGGED_ADDR_CTRL 56
 +#endif
-+#ifndef PR_TAGGED_ADDR_ENABLE
-+#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
-+#endif
 +#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
 +#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
 +#endif
@@ -930,28 +925,47 @@ index 0000000..f1e2d3c
 +    return (void *)((unsigned long)p & 0x00FFFFFFFFFFFFFFUL);
 +}
 +
-+/* Real mmap function pointers — resolved via dlopen in constructor */
++/* Real mmap function pointers — resolved via dlopen to avoid RTLD_NEXT issues */
 +static void *(*real_mmap)(void *, size_t, int, int, int, off_t);
 +static void *(*real_mmap64)(void *, size_t, int, int, int, off64_t);
 +
-+/* ============================================================
-+ * Layer 1: .preinit_array — runs BEFORE dynamic linker init
-+ * ============================================================ */
-+
 +/*
-+ * Disable kernel-level tagged address ABI for this process.
-+ * Uses raw syscall() to avoid any libc wrapper that might allocate.
++ * Intercept mmap: call real mmap, then strip tag from result.
++ * This ensures Bun's Zig code receives untagged pointers.
 + */
-+static void __attribute__((used, section(".preinit_array")))
-+preinit_disable_tagged_pointers(void) {
-+    syscall(SYS_prctl, PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++__attribute__((visibility("default")))
++void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
++    void *result = real_mmap(addr, length, prot, flags, fd, offset);
++    if (result != MAP_FAILED) {
++        result = strip_tag(result);
++    }
++    return result;
 +}
 +
-+/* ============================================================
-+ * Layer 2: constructor(101) — disable heap tagging, resolve mmap
-+ * ============================================================ */
++__attribute__((visibility("default")))
++void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
++    void *result = real_mmap64(addr, length, prot, flags, fd, offset);
++    if (result != MAP_FAILED) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++static void disable_tagged_addresses(void) {
++    /*
++     * Disable kernel-level tagged address ABI for this thread.
++     * Prevents the kernel from stripping tags on syscalls.
++     */
++    long ret = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++    if (ret >= 0) {
++        prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++    }
++}
 +
 +static void disable_heap_tagging(void) {
++    /*
++     * Disable heap-level pointer tagging in Bionic's scudo allocator.
++     */
 +    void *libc = dlopen("libc.so", RTLD_NOW);
 +    if (!libc) return;
 +
@@ -965,57 +979,39 @@ index 0000000..f1e2d3c
 +        int level = M_HEAP_TAGGING_LEVEL_NONE;
 +        android_mallopt_fn(8, &level, sizeof(level));
 +    }
-+    /* Keep libc open — needed for mmap interceptors */
++    dlclose(libc);
 +}
 +
++/*
++ * Resolve mmap/mmap64 from libc using dlopen — RTLD_NEXT is unreliable
++ * in early constructors on Bionic because the symbol interposition order
++ * is not yet fully established.
++ */
 +static void resolve_mmap(void) {
 +    void *libc = dlopen("libc.so", RTLD_NOW);
 +    if (!libc) return;
 +    real_mmap = dlsym(libc, "mmap");
 +    real_mmap64 = dlsym(libc, "mmap64");
++    /* Keep libc open — mmap is needed for the lifetime of the process */
 +}
 +
++/*
++ * Constructor with priority 101 to run as early as possible.
++ * Priority 100 is reserved for the dynamic linker's own init.
++ *
++ * This runs BEFORE main() and before any other constructors,
++ * ensuring tagged pointers are disabled before Bun allocates memory.
++ */
 +void __attribute__((constructor(101))) android_disable_tagged_pointers(void) {
++    /*
++     * Resolve real mmap function pointers FIRST via dlopen, before any
++     * other initialization that might trigger mmap calls.
++     */
 +    resolve_mmap();
++
++    /* Then disable tagged pointers */
++    disable_tagged_addresses();
 +    disable_heap_tagging();
-+}
-+
-+/* ============================================================
-+ * Layer 3: mmap interceptors — strip tags from returned pointers
-+ * ============================================================ */
-+
-+__attribute__((visibility("default")))
-+void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-+    if (!real_mmap) {
-+        long rc = syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
-+        if (rc < 0 && rc > -4096) {
-+            errno = -rc;
-+            return MAP_FAILED;
-+        }
-+        return strip_tag((void *)rc);
-+    }
-+    void *result = real_mmap(addr, length, prot, flags, fd, offset);
-+    if (result != MAP_FAILED) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
-+    if (!real_mmap64) {
-+        long rc = syscall(SYS_mmap2, addr, length, prot, flags, fd, offset >> 12);
-+        if (rc < 0 && rc > -4096) {
-+            errno = -rc;
-+            return MAP_FAILED;
-+        }
-+        return strip_tag((void *)rc);
-+    }
-+    void *result = real_mmap64(addr, length, prot, flags, fd, offset);
-+    if (result != MAP_FAILED) {
-+        result = strip_tag(result);
-+    }
-+    return result;
 +}
 +
 +#endif /* __ANDROID__ && __aarch64__ */
