@@ -73,10 +73,10 @@ index 04afe96..07a91d1 100644
  
      const zlib_internal_path = switch (os) {
 diff --git a/cmake/CSources.txt b/cmake/CSources.txt
-index 67bf951..08212f1 100644
+index 67bf951..4399a8e 100644
 --- a/cmake/CSources.txt
 +++ b/cmake/CSources.txt
-@@ -8,4 +8,5 @@ packages/bun-usockets/src/quic.c
+@@ -8,4 +8,6 @@ packages/bun-usockets/src/quic.c
  packages/bun-usockets/src/socket.c
  packages/bun-usockets/src/udp.c
  src/bun.js/bindings/uv-posix-polyfills.c
@@ -84,6 +84,7 @@ index 67bf951..08212f1 100644
 \ No newline at end of file
 +src/bun.js/bindings/uv-posix-stubs.c
 +src/android_tls_align.c
++src/android_disable_tags.c
 \ No newline at end of file
 diff --git a/cmake/CompilerFlags.cmake b/cmake/CompilerFlags.cmake
 index c321c75..142d228 100644
