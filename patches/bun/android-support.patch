@@ -73,7 +73,7 @@ index 04afe96..07a91d1 100644
  
      const zlib_internal_path = switch (os) {
 diff --git a/cmake/CSources.txt b/cmake/CSources.txt
-index 67bf951..27b7590 100644
+index 67bf951..4399a8e 100644
 --- a/cmake/CSources.txt
 +++ b/cmake/CSources.txt
 @@ -8,4 +8,6 @@ packages/bun-usockets/src/quic.c
@@ -85,6 +85,7 @@ index 67bf951..27b7590 100644
 +src/bun.js/bindings/uv-posix-stubs.c
 +src/android_tls_align.c
 +src/android_disable_tags.c
+\ No newline at end of file
 diff --git a/cmake/CompilerFlags.cmake b/cmake/CompilerFlags.cmake
 index c321c75..142d228 100644
 --- a/cmake/CompilerFlags.cmake
@@ -889,10 +890,10 @@ index 267d1f8..dcc64b7 100644
          _ = string_builder.append(std.mem.asBytes(&offsets));
 diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
 new file mode 100644
-index 0000000..657ec12
+index 0000000..67fc0eb
 --- /dev/null
 +++ b/src/android_disable_tags.c
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,121 @@
 +/*
 + * android_disable_tags.c
 + *
@@ -907,18 +908,12 @@ index 0000000..657ec12
 + * 4. When tagged pointers reach syscalls, kernel strips tags causing
 + *    scudo allocator to detect tag mismatch and abort
 + *
-+ * The "incorrect alignment" panic occurs because:
-+ * - Aligned allocations (posix_memalign, aligned_alloc) return tagged pointers
-+ * - Zig's @alignCast runtime check fails on tagged pointers stored in
-+ *   libuv callback data or mmap'd regions
-+ *
 + * This file is compiled and linked into the Bun binary for Android.
 + */
 +
 +#if defined(__ANDROID__) && defined(__aarch64__)
 +
 +#include <dlfcn.h>
-+#include <stdlib.h>
 +#include <sys/mman.h>
 +#include <sys/prctl.h>
 +#include <unistd.h>
@@ -942,18 +937,13 @@ index 0000000..657ec12
 +    return (void *)((unsigned long)p & 0x00FFFFFFFFFFFFFFUL);
 +}
 +
-+/* Real function pointers — initialized in constructor */
++/* Real mmap function pointers — initialized in constructor */
 +static void *(*real_mmap)(void *, size_t, int, int, int, off_t);
 +static void *(*real_mmap64)(void *, size_t, int, int, int, off64_t);
-+static int (*real_posix_memalign)(void **, size_t, size_t);
-+static void *(*real_aligned_alloc)(size_t, size_t);
-+static void *(*real_memalign)(size_t, size_t);
-+static void *(*real_malloc)(size_t);
-+static void *(*real_calloc)(size_t, size_t);
-+static void *(*real_realloc)(void *, size_t);
 +
 +/*
 + * Intercept mmap: call real mmap, then strip tag from result.
++ * This ensures Bun's Zig code receives untagged pointers.
 + */
 +__attribute__((visibility("default")))
 +void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
@@ -968,70 +958,6 @@ index 0000000..657ec12
 +void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
 +    void *result = real_mmap64(addr, length, prot, flags, fd, offset);
 +    if (result != MAP_FAILED) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+/*
-+ * Intercept aligned allocations — critical for Zig @alignCast safety.
-+ * These functions return pointers with specific alignment guarantees.
-+ * If the pointer is tagged, Zig's runtime alignment check fails.
-+ */
-+__attribute__((visibility("default")))
-+int posix_memalign(void **memptr, size_t alignment, size_t size) {
-+    int ret = real_posix_memalign(memptr, alignment, size);
-+    if (ret == 0 && *memptr != NULL) {
-+        *memptr = strip_tag(*memptr);
-+    }
-+    return ret;
-+}
-+
-+__attribute__((visibility("default")))
-+void *aligned_alloc(size_t alignment, size_t size) {
-+    void *result = real_aligned_alloc(alignment, size);
-+    if (result != NULL) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *memalign(size_t alignment, size_t size) {
-+    void *result = real_memalign(alignment, size);
-+    if (result != NULL) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+/*
-+ * Intercept general allocations — prevent tagged pointers from
-+ * entering libuv callback data and other critical paths.
-+ */
-+__attribute__((visibility("default")))
-+void *malloc(size_t size) {
-+    void *result = real_malloc(size);
-+    if (result != NULL) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *calloc(size_t nmemb, size_t size) {
-+    void *result = real_calloc(nmemb, size);
-+    if (result != NULL) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *realloc(void *ptr, size_t size) {
-+    if (ptr) ptr = strip_tag(ptr);
-+    void *result = real_realloc(ptr, size);
-+    if (result != NULL) {
 +        result = strip_tag(result);
 +    }
 +    return result;
@@ -1077,17 +1003,11 @@ index 0000000..657ec12
 + */
 +void __attribute__((constructor(101))) android_disable_tagged_pointers(void) {
 +    /*
-+     * Initialize real function pointers FIRST, before any
-+     * other initialization that might trigger allocation calls.
++     * Initialize real mmap function pointers FIRST, before any
++     * other initialization that might trigger mmap calls.
 +     */
 +    real_mmap = dlsym(RTLD_NEXT, "mmap");
 +    real_mmap64 = dlsym(RTLD_NEXT, "mmap64");
-+    real_posix_memalign = dlsym(RTLD_NEXT, "posix_memalign");
-+    real_aligned_alloc = dlsym(RTLD_NEXT, "aligned_alloc");
-+    real_memalign = dlsym(RTLD_NEXT, "memalign");
-+    real_malloc = dlsym(RTLD_NEXT, "malloc");
-+    real_calloc = dlsym(RTLD_NEXT, "calloc");
-+    real_realloc = dlsym(RTLD_NEXT, "realloc");
 +
 +    /* Then disable tagged pointers */
 +    disable_tagged_addresses();
@@ -2125,7 +2045,7 @@ index 4187c86..51669c0 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/sys.zig b/src/sys.zig
-index 5f14200..f870d4d 100644
+index 5f14200..15cc0d8 100644
 --- a/src/sys.zig
 +++ b/src/sys.zig
 @@ -1020,7 +1020,7 @@ pub fn fcntl(fd: bun.FileDescriptor, cmd: i32, arg: anytype) Maybe(fnctl_int) {
@@ -2362,15 +2282,6 @@ index 5f14200..f870d4d 100644
  }
  
  pub fn setPipeCapacityOnLinux(fd: bun.FileDescriptor, capacity: usize) Maybe(usize) {
-@@ -3512,7 +3512,7 @@ pub fn setFileOffsetToEndWindows(fd: bun.FileDescriptor) Maybe(usize) {
-         if (rc == windows.FALSE) {
-             return Maybe(usize).errnoSysFd(0, .lseek, fd) orelse Maybe(usize){ .result = 0 };
-         }
--        return Maybe(usize){ .result = @intCast(new_ptr) };
-+        return Maybe(usize){ .result = @truncate(new_ptr) };
-     }
-     @compileError("Not Implemented");
- }
 @@ -3574,7 +3574,7 @@ pub fn dupWithFlags(fd: bun.FileDescriptor, _: i32) Maybe(bun.FileDescriptor) {
          .err => |err| return .{ .err = err },
      };
