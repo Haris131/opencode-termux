@@ -72,20 +72,6 @@ index 04afe96..07a91d1 100644
      mod.addImport("translated-c-headers", b.createModule(.{ .root_source_file = translate_c }));
  
      const zlib_internal_path = switch (os) {
-diff --git a/cmake/CSources.txt b/cmake/CSources.txt
-index 67bf951..4399a8e 100644
---- a/cmake/CSources.txt
-+++ b/cmake/CSources.txt
-@@ -8,4 +8,6 @@ packages/bun-usockets/src/quic.c
- packages/bun-usockets/src/socket.c
- packages/bun-usockets/src/udp.c
- src/bun.js/bindings/uv-posix-polyfills.c
--src/bun.js/bindings/uv-posix-stubs.c
-\ No newline at end of file
-+src/bun.js/bindings/uv-posix-stubs.c
-+src/android_tls_align.c
-+src/android_disable_tags.c
-\ No newline at end of file
 diff --git a/cmake/CompilerFlags.cmake b/cmake/CompilerFlags.cmake
 index c321c75..142d228 100644
 --- a/cmake/CompilerFlags.cmake
@@ -888,12 +874,13 @@ index 267d1f8..dcc64b7 100644
          };
  
          _ = string_builder.append(std.mem.asBytes(&offsets));
+
 diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
 new file mode 100644
-index 0000000..67fc0eb
+index 0000000..a1b2c3d
 --- /dev/null
 +++ b/src/android_disable_tags.c
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,134 @@
 +/*
 + * android_disable_tags.c
 + *
@@ -916,6 +903,7 @@ index 0000000..67fc0eb
 +#include <dlfcn.h>
 +#include <sys/mman.h>
 +#include <sys/prctl.h>
++#include <sys/syscall.h>
 +#include <unistd.h>
 +#include <errno.h>
 +
@@ -937,7 +925,7 @@ index 0000000..67fc0eb
 +    return (void *)((unsigned long)p & 0x00FFFFFFFFFFFFFFUL);
 +}
 +
-+/* Real mmap function pointers — initialized in constructor */
++/* Real mmap function pointers — resolved via dlopen to avoid RTLD_NEXT issues */
 +static void *(*real_mmap)(void *, size_t, int, int, int, off_t);
 +static void *(*real_mmap64)(void *, size_t, int, int, int, off64_t);
 +
@@ -995,6 +983,19 @@ index 0000000..67fc0eb
 +}
 +
 +/*
++ * Resolve mmap/mmap64 from libc using dlopen — RTLD_NEXT is unreliable
++ * in early constructors on Bionic because the symbol interposition order
++ * is not yet fully established.
++ */
++static void resolve_mmap(void) {
++    void *libc = dlopen("libc.so", RTLD_NOW);
++    if (!libc) return;
++    real_mmap = dlsym(libc, "mmap");
++    real_mmap64 = dlsym(libc, "mmap64");
++    /* Keep libc open — mmap is needed for the lifetime of the process */
++}
++
++/*
 + * Constructor with priority 101 to run as early as possible.
 + * Priority 100 is reserved for the dynamic linker's own init.
 + *
@@ -1003,11 +1004,10 @@ index 0000000..67fc0eb
 + */
 +void __attribute__((constructor(101))) android_disable_tagged_pointers(void) {
 +    /*
-+     * Initialize real mmap function pointers FIRST, before any
++     * Resolve real mmap function pointers FIRST via dlopen, before any
 +     * other initialization that might trigger mmap calls.
 +     */
-+    real_mmap = dlsym(RTLD_NEXT, "mmap");
-+    real_mmap64 = dlsym(RTLD_NEXT, "mmap64");
++    resolve_mmap();
 +
 +    /* Then disable tagged pointers */
 +    disable_tagged_addresses();
@@ -1015,43 +1015,7 @@ index 0000000..67fc0eb
 +}
 +
 +#endif /* __ANDROID__ && __aarch64__ */
-diff --git a/src/android_tls_align.c b/src/android_tls_align.c
-new file mode 100644
-index 0000000..f801b82
---- /dev/null
-+++ b/src/android_tls_align.c
-@@ -0,0 +1,31 @@
-+/**
-+ * Android TLS alignment shim.
-+ *
-+ * On ARM64, Android's Bionic dynamic linker requires the ELF TLS segment
-+ * to have p_align >= 64 bytes (to reserve 8 TCB slots before the TLS data).
-+ * The Zig linker emits p_align based on the maximum alignment of all TLS
-+ * variables, which defaults to 8 for Zig threadlocal variables.
-+ *
-+ * This file provides a dummy __thread variable with alignment 64, which
-+ * forces the linker (lld) to:
-+ *   1. Set PT_TLS p_align = 64
-+ *   2. Compute tp_offset = round_up(2*sizeof(void*), 64) = 64
-+ *   3. Resolve all R_AARCH64_TLSLE_ADD_TPREL relocations with tp_offset=64
-+ *
-+ * Without this, the Zig linker would emit p_align=8, lld would compute
-+ * tp_offset=16, and all TLS accesses would collide with Bionic's TCB slots,
-+ * corrupting critical runtime state (DTV, thread_id, scudo allocator, etc.).
-+ *
-+ * This file MUST be compiled with the Android NDK and linked into the final
-+ * binary alongside the Zig object file.
-+ */
-+
-+#if defined(__ANDROID__) && defined(__aarch64__)
-+__attribute__((aligned(64)))
-+static __thread char _android_tls_align_dummy[64];
-+
-+/* Prevent the compiler from optimizing away the variable */
-+void *_android_tls_align_anchor(void) {
-+    return (void *)_android_tls_align_dummy;
-+}
-+#endif
+
 diff --git a/src/android_tls_align.s b/src/android_tls_align.s
 new file mode 100644
 index 0000000..6ea310b
@@ -1085,6 +1049,7 @@ index 0000000..6ea310b
 +.size _android_tls_align_force,64
 +_android_tls_align_force:
 +.zero 64
+
 diff --git a/src/bun.js/bindings/ZigGlobalObject.cpp b/src/bun.js/bindings/ZigGlobalObject.cpp
 index 5e534e5..e60230d 100644
 --- a/src/bun.js/bindings/ZigGlobalObject.cpp
@@ -1950,6 +1915,26 @@ index 4187c86..51669c0 100644
      return @bitCast(
          std.os.linux.syscall6(
              .epoll_pwait2,
+diff --git a/src/sys.zig b/src/sys.zig
+index 5f14200..b2c3d4e 100644
+--- a/src/sys.zig
++++ b/src/sys.zig
+@@ -2969,8 +2969,13 @@ pub fn memfd_create(name: [:0]const u8, flags: u32) Maybe(bun.FileDescriptor) {
+     if (comptime !Environment.isLinux) @compileError("linux only!");
+
++    if (comptime Environment.isAndroid) {
++        // Android seccomp may block memfd_create in app processes (Termux).
++        // Return EACCES so the caller falls back to shm_open or temp files.
++        return .{ .err = .{ .errno = @intFromEnum(E.ACCES), .syscall = .memfd_create } };
++    }
+     const rc = std.os.linux.memfd_create(name, flags);
+
+     log("memfd_create({s}, {d}) = {d}", .{ name, flags, rc });
+
+     return Maybe(bun.FileDescriptor).errnoSys(rc, .memfd_create) orelse
+         .{ .result = .fromNative(@intCast(rc)) };
+ }
+
 diff --git a/src/test/recover.zig b/src/test/recover.zig
 index 92f881c..1113bd3 100644
 --- a/src/test/recover.zig
