@@ -73,7 +73,7 @@ index 04afe96..07a91d1 100644
  
      const zlib_internal_path = switch (os) {
 diff --git a/cmake/CSources.txt b/cmake/CSources.txt
-index 67bf951..4399a8e 100644
+index 67bf951..27b7590 100644
 --- a/cmake/CSources.txt
 +++ b/cmake/CSources.txt
 @@ -8,4 +8,6 @@ packages/bun-usockets/src/quic.c
@@ -85,7 +85,6 @@ index 67bf951..4399a8e 100644
 +src/bun.js/bindings/uv-posix-stubs.c
 +src/android_tls_align.c
 +src/android_disable_tags.c
-\ No newline at end of file
 diff --git a/cmake/CompilerFlags.cmake b/cmake/CompilerFlags.cmake
 index c321c75..142d228 100644
 --- a/cmake/CompilerFlags.cmake
@@ -2126,10 +2125,123 @@ index 4187c86..51669c0 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/sys.zig b/src/sys.zig
-index 5f14200..5d94cc7 100644
+index 5f14200..f870d4d 100644
 --- a/src/sys.zig
 +++ b/src/sys.zig
-@@ -2095,7 +2095,7 @@ pub fn pread(fd: bun.FileDescriptor, buf: []u8, offset: i64) Maybe(usize) {
+@@ -1020,7 +1020,7 @@ pub fn fcntl(fd: bun.FileDescriptor, cmd: i32, arg: anytype) Maybe(fnctl_int) {
+             if (err.getErrno() == .INTR) continue;
+             return err;
+         }
+-        return .{ .result = @intCast(result) };
++        return .{ .result = @truncate(result) };
+     }
+ 
+     unreachable;
+@@ -1726,7 +1726,7 @@ pub fn openatOSPath(dirfd: bun.FileDescriptor, file_path: bun.OSPathSliceZ, flag
+             log("openat({}, {s}, {d}) = {d}", .{ dirfd, bun.sliceTo(file_path, 0), flags, rc });
+ 
+         return switch (sys.getErrno(rc)) {
+-            .SUCCESS => .{ .result = .fromNative(@intCast(rc)) },
++            .SUCCESS => .{ .result = .fromNative(@truncate(rc)) },
+             .INTR => continue,
+             else => |err| {
+                 return .{
+@@ -1852,7 +1852,7 @@ pub fn write(fd: bun.FileDescriptor, bytes: []const u8) Maybe(usize) {
+                 return err;
+             }
+ 
+-            return Maybe(usize){ .result = @intCast(rc) };
++            return Maybe(usize){ .result = @truncate(rc) };
+         },
+         .linux => {
+             while (true) {
+@@ -1864,7 +1864,7 @@ pub fn write(fd: bun.FileDescriptor, bytes: []const u8) Maybe(usize) {
+                     return err;
+                 }
+ 
+-                return Maybe(usize){ .result = @intCast(rc) };
++                return Maybe(usize){ .result = @truncate(rc) };
+             }
+         },
+         .windows => {
+@@ -1925,7 +1925,7 @@ pub fn writev(fd: bun.FileDescriptor, buffers: []std.posix.iovec) Maybe(usize) {
+             return err;
+         }
+ 
+-        return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++        return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+     } else {
+         while (true) {
+             const rc = writev_sym(fd.cast(), @as([*]std.posix.iovec_const, @ptrCast(buffers.ptr)), buffers.len);
+@@ -1937,7 +1937,7 @@ pub fn writev(fd: bun.FileDescriptor, buffers: []std.posix.iovec) Maybe(usize) {
+                 return err;
+             }
+ 
+-            return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++            return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+         }
+         unreachable;
+     }
+@@ -1956,7 +1956,7 @@ pub fn pwritev(fd: bun.FileDescriptor, buffers: []const bun.PlatformIOVecConst,
+             return err;
+         }
+ 
+-        return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++        return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+     } else {
+         while (true) {
+             const rc = pwritev_sym(fd.cast(), buffers.ptr, buffers.len, position);
+@@ -1968,7 +1968,7 @@ pub fn pwritev(fd: bun.FileDescriptor, buffers: []const bun.PlatformIOVecConst,
+                 return err;
+             }
+ 
+-            return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++            return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+         }
+         unreachable;
+     }
+@@ -1990,7 +1990,7 @@ pub fn readv(fd: bun.FileDescriptor, buffers: []std.posix.iovec) Maybe(usize) {
+             return err;
+         }
+ 
+-        return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++        return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+     } else {
+         while (true) {
+             const rc = readv_sym(fd.cast(), buffers.ptr, buffers.len);
+@@ -2002,7 +2002,7 @@ pub fn readv(fd: bun.FileDescriptor, buffers: []std.posix.iovec) Maybe(usize) {
+                 return err;
+             }
+ 
+-            return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++            return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+         }
+         unreachable;
+     }
+@@ -2024,7 +2024,7 @@ pub fn preadv(fd: bun.FileDescriptor, buffers: []std.posix.iovec, position: isiz
+             return err;
+         }
+ 
+-        return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++        return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+     } else {
+         while (true) {
+             const rc = preadv_sym(fd.cast(), buffers.ptr, buffers.len, position);
+@@ -2036,7 +2036,7 @@ pub fn preadv(fd: bun.FileDescriptor, buffers: []std.posix.iovec, position: isiz
+                 return err;
+             }
+ 
+-            return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++            return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+         }
+         unreachable;
+     }
+@@ -2091,11 +2091,11 @@ pub fn pread(fd: bun.FileDescriptor, buf: []u8, offset: i64) Maybe(usize) {
+             if (err.getErrno() == .INTR) continue;
+             return err;
+         }
+-        return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++        return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
      }
  }
  
@@ -2138,6 +2250,193 @@ index 5f14200..5d94cc7 100644
      libc.pwrite64
  else
      syscall.pwrite;
+@@ -2117,7 +2117,7 @@ pub fn pwrite(fd: bun.FileDescriptor, bytes: []const u8, offset: i64) Maybe(usiz
+                 .INTR => continue,
+                 else => return err,
+             }
+-        } else Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++        } else Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+     }
+ }
+ 
+@@ -2139,7 +2139,7 @@ pub fn read(fd: bun.FileDescriptor, buf: []u8) Maybe(usize) {
+             }
+             log("read({}, {d}) = {d} ({any})", .{ fd, adjusted_len, rc, debug_timer });
+ 
+-            return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++            return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+         },
+         .linux => {
+             while (true) {
+@@ -2150,7 +2150,7 @@ pub fn read(fd: bun.FileDescriptor, buf: []u8) Maybe(usize) {
+                     if (err.getErrno() == .INTR) continue;
+                     return err;
+                 }
+-                return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++                return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+             }
+         },
+         .windows => if (fd.kind == .uv)
+@@ -2222,7 +2222,7 @@ pub fn recv(fd: bun.FileDescriptor, buf: []u8, flag: u32) Maybe(usize) {
+ 
+         log("recv({}, {d}) = {d} {}", .{ fd, adjusted_len, rc, debug_timer });
+ 
+-        return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++        return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+     } else {
+         while (true) {
+             const rc = linux.recvfrom(fd.cast(), buf.ptr, adjusted_len, flag, null, null);
+@@ -2233,7 +2233,7 @@ pub fn recv(fd: bun.FileDescriptor, buf: []u8, flag: u32) Maybe(usize) {
+                 return err;
+             }
+             log("recv({}, {d}) = {d} {}", .{ fd, adjusted_len, rc, debug_timer });
+-            return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++            return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+         }
+     }
+ }
+@@ -2253,7 +2253,7 @@ pub fn send(fd: bun.FileDescriptor, buf: []const u8, flag: u32) Maybe(usize) {
+ 
+         syslog("send({}, {d}) = {d}", .{ fd, buf.len, rc });
+ 
+-        return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++        return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+     } else {
+         while (true) {
+             const rc = linux.sendto(fd.cast(), buf.ptr, buf.len, flag, null, 0);
+@@ -2265,7 +2265,7 @@ pub fn send(fd: bun.FileDescriptor, buf: []const u8, flag: u32) Maybe(usize) {
+             }
+ 
+             syslog("send({}, {d}) = {d}", .{ fd, buf.len, rc });
+-            return Maybe(usize){ .result = @as(usize, @intCast(rc)) };
++            return Maybe(usize){ .result = @as(usize, @truncate(rc)) };
+         }
+     }
+ }
+@@ -2279,7 +2279,7 @@ pub fn pidfd_open(pid: std.os.linux.pid_t, flags: u32) Maybe(i32) {
+             return err;
+         }
+ 
+-        return Maybe(i32){ .result = @intCast(rc) };
++        return Maybe(i32){ .result = @truncate(rc) };
+     }
+ 
+     unreachable;
+@@ -2309,8 +2309,8 @@ pub fn readlink(in: [:0]const u8, buf: []u8) Maybe([:0]u8) {
+             if (err.getErrno() == .INTR) continue;
+             return err;
+         }
+-        buf[@intCast(rc)] = 0;
+-        return .{ .result = buf[0..@intCast(rc) :0] };
++        buf[@truncate(rc)] = 0;
++        return .{ .result = buf[0..@truncate(rc) :0] };
+     }
+ }
+ 
+@@ -2322,8 +2322,8 @@ pub fn readlinkat(fd: bun.FileDescriptor, in: [:0]const u8, buf: []u8) Maybe([:0
+             if (err.getErrno() == .INTR) continue;
+             return err;
+         }
+-        buf[@intCast(rc)] = 0;
+-        return Maybe([:0]u8){ .result = buf[0..@intCast(rc) :0] };
++        buf[@truncate(rc)] = 0;
++        return Maybe([:0]u8){ .result = buf[0..@truncate(rc) :0] };
+     }
+ }
+ 
+@@ -2860,7 +2860,7 @@ pub fn setsockopt(fd: bun.FileDescriptor, level: c_int, optname: u32, value: i32
+             return err;
+         }
+         log("setsockopt({d}, {d}, {d}) = {d}", .{ fd.cast(), level, optname, rc });
+-        return .{ .result = @intCast(rc) };
++        return .{ .result = @truncate(rc) };
+     }
+ 
+     unreachable;
+@@ -2977,7 +2977,7 @@ pub fn memfd_create(name: [:0]const u8, flags: u32) Maybe(bun.FileDescriptor) {
+     log("memfd_create({s}, {d}) = {d}", .{ name, flags, rc });
+ 
+     return Maybe(bun.FileDescriptor).errnoSys(rc, .memfd_create) orelse
+-        .{ .result = .fromNative(@intCast(rc)) };
++        .{ .result = .fromNative(@truncate(rc)) };
+ }
+ 
+ pub fn setPipeCapacityOnLinux(fd: bun.FileDescriptor, capacity: usize) Maybe(usize) {
+@@ -3512,7 +3512,7 @@ pub fn setFileOffsetToEndWindows(fd: bun.FileDescriptor) Maybe(usize) {
+         if (rc == windows.FALSE) {
+             return Maybe(usize).errnoSysFd(0, .lseek, fd) orelse Maybe(usize){ .result = 0 };
+         }
+-        return Maybe(usize){ .result = @intCast(new_ptr) };
++        return Maybe(usize){ .result = @truncate(new_ptr) };
+     }
+     @compileError("Not Implemented");
+ }
+@@ -3574,7 +3574,7 @@ pub fn dupWithFlags(fd: bun.FileDescriptor, _: i32) Maybe(bun.FileDescriptor) {
+         .err => |err| return .{ .err = err },
+     };
+ 
+-    return .initResult(.fromNative(@intCast(out)));
++    return .initResult(.fromNative(@truncate(out)));
+ }
+ 
+ pub fn dup(fd: bun.FileDescriptor) Maybe(bun.FileDescriptor) {
+@@ -3712,7 +3712,7 @@ pub fn readNonblocking(fd: bun.FileDescriptor, buf: []u8) Maybe(usize) {
+                 }
+             }
+ 
+-            return .{ .result = @as(usize, @intCast(rc)) };
++            return .{ .result = @as(usize, @truncate(rc)) };
+         }
+     }
+ 
+@@ -3765,7 +3765,7 @@ pub fn writeNonblocking(fd: bun.FileDescriptor, buf: []const u8) Maybe(usize) {
+                 }
+             }
+ 
+-            return .{ .result = @as(usize, @intCast(rc)) };
++            return .{ .result = @as(usize, @truncate(rc)) };
+         }
+     }
+ 
+@@ -3781,12 +3781,12 @@ pub fn getFileSize(fd: bun.FileDescriptor) Maybe(usize) {
+             return .{ .err = err };
+         }
+         log("GetFileSizeEx({}) = {d}", .{ fd, size });
+-        return .{ .result = @intCast(@max(size, 0)) };
++        return .{ .result = @truncate(@max(size, 0)) };
+     }
+ 
+     switch (fstat(fd)) {
+         .result => |*stat_| {
+-            return .{ .result = @intCast(@max(stat_.size, 0)) };
++            return .{ .result = @truncate(@max(stat_.size, 0)) };
+         },
+         .err => |err| {
+             return .{ .err = err };
+@@ -3871,7 +3871,7 @@ pub const File = struct {
+ 
+         if (comptime Environment.isLinux) {
+             if (T == u64) {
+-                return File{ .handle = .fromNative(@intCast(other)) };
++                return File{ .handle = .fromNative(@truncate(other)) };
+             }
+         }
+ 
+@@ -4103,12 +4103,12 @@ pub const File = struct {
+                     }
+ 
+                     list.items.len += bytes_read;
+-                    total += @intCast(bytes_read);
++                    total += @truncate(bytes_read);
+                 },
+             }
+         }
+ 
+-        return .{ .result = @intCast(total) };
++        return .{ .result = @truncate(total) };
+     }
+ 
+     /// Use this function on potentially large files.
 diff --git a/src/test/recover.zig b/src/test/recover.zig
 index 92f881c..1113bd3 100644
 --- a/src/test/recover.zig
