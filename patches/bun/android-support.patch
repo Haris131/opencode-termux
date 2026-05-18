@@ -1031,7 +1031,7 @@ index 0000000..657ec12
 +__attribute__((visibility("default")))
 +void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
 +    if (!real_mmap64) {
-+        void *result = (void *)syscall(SYS_mmap2, addr, length, prot, flags, fd, offset);
++        void *result = (void *)syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
 +        if (result != MAP_FAILED && result != (void *)-1) {
 +            result = strip_tag(result);
 +        }
@@ -2230,7 +2230,7 @@ index 4187c86..51669c0 100644
 +    if (comptime bun.Environment.isAndroid) {
 +        // Android seccomp may block epoll_pwait2 in app processes (Termux).
 +        // Return ENOSYS so the caller falls back to epoll_pwait.
-+        return -@as(isize, @truncate(@intFromEnum(std.os.linux.E.NOSYS)));
++        return -@as(isize, @intCast(@as(i64, @intFromEnum(std.os.linux.E.NOSYS))));
 +    }
      return @bitCast(
          std.os.linux.syscall6(
