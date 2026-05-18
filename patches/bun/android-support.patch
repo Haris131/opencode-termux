@@ -915,15 +915,18 @@ index 0000000..657ec12
 + *
 + * This file is compiled and linked into the Bun binary for Android.
 + */
-+
+
 +#if defined(__ANDROID__) && defined(__aarch64__)
-+
+
 +#include <dlfcn.h>
 +#include <stdlib.h>
++#include <string.h>
 +#include <sys/mman.h>
 +#include <sys/prctl.h>
++#include <sys/syscall.h>
 +#include <unistd.h>
 +#include <errno.h>
++#include <stdint.h>
 +
 +#ifndef PR_SET_TAGGED_ADDR_CTRL
 +#define PR_SET_TAGGED_ADDR_CTRL 55
@@ -940,7 +943,7 @@ index 0000000..657ec12
 +
 +/* Strip top byte (tag bits 56-63) from ARM64 pointer */
 +static inline void *strip_tag(void *p) {
-+    return (void *)((unsigned long)p & 0x00FFFFFFFFFFFFFFUL);
++    return (void *)((uintptr_t)p & 0x00FFFFFFFFFFFFFFUL);
 +}
 +
 +/* Real function pointers — initialized in constructor */
@@ -954,10 +957,70 @@ index 0000000..657ec12
 +static void *(*real_realloc)(void *, size_t);
 +
 +/*
++ * Recursion guard: prevents infinite loops when dlsym/malloc call
++ * each other during constructor initialization.
++ *
++ * Also acts as an "initialized" flag: if 0, we're not yet initialized
++ * and must use the early allocation buffer.
++ */
++static __thread int in_interceptor = 0;
++
++/*
++ * Early allocation buffer: used before the constructor runs, when
++ * real_malloc is still NULL. This is a simple bump allocator.
++ */
++static char early_buffer[8192];
++static size_t early_offset = 0;
++
++static void *early_malloc(size_t size) {
++    /* Align to 16 bytes */
++    size = (size + 15) & ~(size_t)15;
++    if (early_offset + size > sizeof(early_buffer)) {
++        /* Fallback: use raw mmap syscall */
++        void *result = (void *)syscall(SYS_mmap, NULL, size,
++                                       PROT_READ | PROT_WRITE,
++                                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++        if (result == (void *)-1 || result == MAP_FAILED) {
++            return NULL;
++        }
++        return strip_tag(result);
++    }
++    void *ptr = &early_buffer[early_offset];
++    early_offset += size;
++    return ptr;
++}
++
++static void *early_calloc(size_t nmemb, size_t size) {
++    void *ptr = early_malloc(nmemb * size);
++    if (ptr) {
++        memset(ptr, 0, nmemb * size);
++    }
++    return ptr;
++}
++
++static void *early_realloc(void *ptr, size_t size) {
++    /* Simple bump allocator: can't realloc, just allocate new */
++    void *new_ptr = early_malloc(size);
++    if (new_ptr && ptr) {
++        /* We don't know the old size, so this is imperfect */
++        memcpy(new_ptr, ptr, size);
++    }
++    return new_ptr;
++}
++
++/*
 + * Intercept mmap: call real mmap, then strip tag from result.
 + */
 +__attribute__((visibility("default")))
 +void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
++    if (!real_mmap) {
++        /* Not initialized yet: use raw syscall */
++        void *result = (void *)syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
++        if (result != MAP_FAILED && result != (void *)-1) {
++            result = strip_tag(result);
++        }
++        return result;
++    }
 +    void *result = real_mmap(addr, length, prot, flags, fd, offset);
 +    if (result != MAP_FAILED) {
 +        result = strip_tag(result);
@@ -967,6 +1030,13 @@ index 0000000..657ec12
 +
 +__attribute__((visibility("default")))
 +void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
++    if (!real_mmap64) {
++        void *result = (void *)syscall(SYS_mmap2, addr, length, prot, flags, fd, offset);
++        if (result != MAP_FAILED && result != (void *)-1) {
++            result = strip_tag(result);
++        }
++        return result;
++    }
 +    void *result = real_mmap64(addr, length, prot, flags, fd, offset);
 +    if (result != MAP_FAILED) {
 +        result = strip_tag(result);
@@ -981,7 +1051,18 @@ index 0000000..657ec12
 + */
 +__attribute__((visibility("default")))
 +int posix_memalign(void **memptr, size_t alignment, size_t size) {
++    if (in_interceptor || !real_posix_memalign) {
++        void *ptr = early_malloc(size);
++        if (!ptr) return ENOMEM;
++        /* Ensure alignment */
++        uintptr_t addr = (uintptr_t)ptr;
++        uintptr_t aligned = (addr + alignment - 1) & ~(alignment - 1);
++        *memptr = strip_tag((void *)aligned);
++        return 0;
++    }
++    in_interceptor = 1;
 +    int ret = real_posix_memalign(memptr, alignment, size);
++    in_interceptor = 0;
 +    if (ret == 0 && *memptr != NULL) {
 +        *memptr = strip_tag(*memptr);
 +    }
@@ -990,7 +1071,12 @@ index 0000000..657ec12
 +
 +__attribute__((visibility("default")))
 +void *aligned_alloc(size_t alignment, size_t size) {
++    if (in_interceptor || !real_aligned_alloc) {
++        return early_malloc(size);
++    }
++    in_interceptor = 1;
 +    void *result = real_aligned_alloc(alignment, size);
++    in_interceptor = 0;
 +    if (result != NULL) {
 +        result = strip_tag(result);
 +    }
@@ -999,7 +1085,12 @@ index 0000000..657ec12
 +
 +__attribute__((visibility("default")))
 +void *memalign(size_t alignment, size_t size) {
++    if (in_interceptor || !real_memalign) {
++        return early_malloc(size);
++    }
++    in_interceptor = 1;
 +    void *result = real_memalign(alignment, size);
++    in_interceptor = 0;
 +    if (result != NULL) {
 +        result = strip_tag(result);
 +    }
@@ -1012,7 +1103,12 @@ index 0000000..657ec12
 + */
 +__attribute__((visibility("default")))
 +void *malloc(size_t size) {
++    if (in_interceptor || !real_malloc) {
++        return early_malloc(size);
++    }
++    in_interceptor = 1;
 +    void *result = real_malloc(size);
++    in_interceptor = 0;
 +    if (result != NULL) {
 +        result = strip_tag(result);
 +    }
@@ -1021,7 +1117,12 @@ index 0000000..657ec12
 +
 +__attribute__((visibility("default")))
 +void *calloc(size_t nmemb, size_t size) {
++    if (in_interceptor || !real_calloc) {
++        return early_calloc(nmemb, size);
++    }
++    in_interceptor = 1;
 +    void *result = real_calloc(nmemb, size);
++    in_interceptor = 0;
 +    if (result != NULL) {
 +        result = strip_tag(result);
 +    }
@@ -1031,7 +1132,12 @@ index 0000000..657ec12
 +__attribute__((visibility("default")))
 +void *realloc(void *ptr, size_t size) {
 +    if (ptr) ptr = strip_tag(ptr);
++    if (in_interceptor || !real_realloc) {
++        return early_realloc(ptr, size);
++    }
++    in_interceptor = 1;
 +    void *result = real_realloc(ptr, size);
++    in_interceptor = 0;
 +    if (result != NULL) {
 +        result = strip_tag(result);
 +    }
@@ -1080,6 +1186,10 @@ index 0000000..657ec12
 +    /*
 +     * Initialize real function pointers FIRST, before any
 +     * other initialization that might trigger allocation calls.
++     *
++     * IMPORTANT: dlsym may internally call malloc, which would
++     * trigger our interceptor. The in_interceptor guard and
++     * early_malloc fallback handle this case.
 +     */
 +    real_mmap = dlsym(RTLD_NEXT, "mmap");
 +    real_mmap64 = dlsym(RTLD_NEXT, "mmap64");
@@ -2120,7 +2230,7 @@ index 4187c86..51669c0 100644
 +    if (comptime bun.Environment.isAndroid) {
 +        // Android seccomp may block epoll_pwait2 in app processes (Termux).
 +        // Return ENOSYS so the caller falls back to epoll_pwait.
-+        return -@as(isize, @intCast(@intFromEnum(std.os.linux.E.NOSYS)));
++        return -@as(isize, @truncate(@intFromEnum(std.os.linux.E.NOSYS)));
 +    }
      return @bitCast(
          std.os.linux.syscall6(
