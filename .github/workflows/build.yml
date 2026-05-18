@@ -7,6 +7,10 @@ on:
         description: 'OpenCode version to build'
         required: false
         default: '1.3.13'
+      commit_sha:
+        description: 'Commit hash'
+        required: false
+        default: 'main'
 
 env:
   BUN_VERSION: "1.2.13"
@@ -34,6 +38,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.commit_sha || 'main' }}
 
       - name: Override OpenCode version from input
         if: github.event.inputs.opencode_version
