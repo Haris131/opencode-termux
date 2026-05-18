@@ -877,16 +877,14 @@ index 267d1f8..dcc64b7 100644
 
 diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
 new file mode 100644
-index 0000000..a1b2c3d
+index 0000000..b2c3d4e
 --- /dev/null
 +++ b/src/android_disable_tags.c
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,172 @@
 +/*
 + * android_disable_tags.c
 + *
 + * Built-in workaround for Android tagged pointer (TBI/MTE) crashes.
-+ * Runs as an early constructor to disable tagged pointers BEFORE any
-+ * Bun allocations occur, eliminating the need for LD_PRELOAD.
 + *
 + * The "Pointer tag for 0x... was truncated" SIGABRT occurs because:
 + * 1. Android 11+ enables Top-byte Ignore (TBI) pointer tagging on ARM64
@@ -906,12 +904,16 @@ index 0000000..a1b2c3d
 +#include <sys/syscall.h>
 +#include <unistd.h>
 +#include <errno.h>
++#include <pthread.h>
 +
 +#ifndef PR_SET_TAGGED_ADDR_CTRL
 +#define PR_SET_TAGGED_ADDR_CTRL 55
 +#endif
 +#ifndef PR_GET_TAGGED_ADDR_CTRL
 +#define PR_GET_TAGGED_ADDR_CTRL 56
++#endif
++#ifndef PR_TAGGED_ADDR_ENABLE
++#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
 +#endif
 +#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
 +#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
@@ -954,12 +956,57 @@ index 0000000..a1b2c3d
 +static void disable_tagged_addresses(void) {
 +    /*
 +     * Disable kernel-level tagged address ABI for this thread.
-+     * Prevents the kernel from stripping tags on syscalls.
++     * Uses raw syscall to avoid any libc wrapper that might allocate.
 +     */
-+    long ret = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+    if (ret >= 0) {
-+        prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++    syscall(SYS_prctl, PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++}
++
++/* ---------- pthread_create hook for new threads ---------- */
++
++typedef struct {
++    void *(*start_routine)(void *);
++    void *arg;
++} thread_start_ctx;
++
++static void *thread_start_wrapper(void *ctx_ptr) {
++    /* Disable tagged pointers on this new thread BEFORE running user code */
++    syscall(SYS_prctl, PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++
++    thread_start_ctx *ctx = (thread_start_ctx *)ctx_ptr;
++    void *(*start_routine)(void *) = ctx->start_routine;
++    void *arg = ctx->arg;
++
++    /* Free the context allocated in our pthread_create wrapper */
++    void *libc = dlopen("libc.so", RTLD_NOW);
++    if (libc) {
++        void (*real_free)(void *) = dlsym(libc, "free");
++        if (real_free) real_free(ctx);
 +    }
++
++    return start_routine(arg);
++}
++
++static int (*real_pthread_create)(pthread_t *, const pthread_attr_t *, void *(*)(void *), void *);
++
++__attribute__((visibility("default")))
++int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
++                   void *(*start_routine)(void *), void *arg) {
++    if (!real_pthread_create) {
++        void *libc = dlopen("libc.so", RTLD_NOW);
++        if (libc) {
++            real_pthread_create = dlsym(libc, "pthread_create");
++        }
++    }
++    if (!real_pthread_create) {
++        return EAGAIN;
++    }
++
++    thread_start_ctx *ctx = malloc(sizeof(thread_start_ctx));
++    if (!ctx) return ENOMEM;
++    ctx->start_routine = start_routine;
++    ctx->arg = arg;
++
++    return real_pthread_create(thread, attr, thread_start_wrapper, ctx);
 +}
 +
 +static void disable_heap_tagging(void) {
