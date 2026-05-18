@@ -893,7 +893,7 @@ new file mode 100644
 index 0000000..a1b2c3d
 --- /dev/null
 +++ b/src/android_disable_tags.c
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,63 @@
 +/*
 + * android_disable_tags.c
 + *
