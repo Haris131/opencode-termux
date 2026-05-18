@@ -890,49 +890,36 @@ index 267d1f8..dcc64b7 100644
          _ = string_builder.append(std.mem.asBytes(&offsets));
 diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
 new file mode 100644
-index 0000000..657ec12
+index 0000000..a1b2c3d
 --- /dev/null
 +++ b/src/android_disable_tags.c
-@@ -0,0 +1,312 @@
+@@ -0,0 +1,58 @@
 +/*
 + * android_disable_tags.c
 + *
-+ * Built-in workaround for Android tagged pointer (TBI/MTE) crashes.
-+ * Runs as an early constructor to disable tagged pointers BEFORE any
-+ * Bun allocations occur, eliminating the need for LD_PRELOAD.
++ * Disable ARM64 pointer tagging (TBI/MTE) on Android to prevent
++ * crashes in Bun's Zig code which doesn't handle tagged pointers.
 + *
-+ * The "Pointer tag for 0x... was truncated" SIGABRT occurs because:
-+ * 1. Android 11+ enables Top-byte Ignore (TBI) pointer tagging on ARM64
-+ * 2. JSC JIT allocates large mmap regions (32MB+) that get tagged
-+ * 3. Bun's Zig code doesn't handle tagged pointers
-+ * 4. When tagged pointers reach syscalls, kernel strips tags causing
-+ *    scudo allocator to detect tag mismatch and abort
-+ *
-+ * The "incorrect alignment" panic occurs because:
-+ * - Aligned allocations (posix_memalign, aligned_alloc) return tagged pointers
-+ * - Zig's @alignCast runtime check fails on tagged pointers stored in
-+ *   libuv callback data or mmap'd regions
-+ *
-+ * This file is compiled and linked into the Bun binary for Android.
++ * This runs as an early constructor, BEFORE any Bun allocations.
++ * We disable tagging at the source (kernel + heap allocator) rather
++ * than intercepting allocation functions, which is fragile and causes
++ * segfaults when overriding malloc/calloc in the dynamic linker context.
 + */
 +
 +#if defined(__ANDROID__) && defined(__aarch64__)
 +
 +#include <dlfcn.h>
 +#include <stdlib.h>
-+#include <string.h>
-+#include <sys/mman.h>
 +#include <sys/prctl.h>
-+#include <sys/syscall.h>
-+#include <unistd.h>
-+#include <errno.h>
-+#include <stdint.h>
 +
 +#ifndef PR_SET_TAGGED_ADDR_CTRL
 +#define PR_SET_TAGGED_ADDR_CTRL 55
 +#endif
 +#ifndef PR_GET_TAGGED_ADDR_CTRL
 +#define PR_GET_TAGGED_ADDR_CTRL 56
++#endif
++#ifndef PR_TAGGED_ADDR_ENABLE
++#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
 +#endif
 +#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
 +#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
@@ -941,224 +928,13 @@ index 0000000..657ec12
 +#define M_HEAP_TAGGING_LEVEL_NONE 0
 +#endif
 +
-+/* Strip top byte (tag bits 56-63) from ARM64 pointer */
-+static inline void *strip_tag(void *p) {
-+    return (void *)((uintptr_t)p & 0x00FFFFFFFFFFFFFFUL);
-+}
-+
-+/* Real function pointers — initialized in constructor */
-+static void *(*real_mmap)(void *, size_t, int, int, int, off_t);
-+static void *(*real_mmap64)(void *, size_t, int, int, int, off64_t);
-+static int (*real_posix_memalign)(void **, size_t, size_t);
-+static void *(*real_aligned_alloc)(size_t, size_t);
-+static void *(*real_memalign)(size_t, size_t);
-+static void *(*real_malloc)(size_t);
-+static void *(*real_calloc)(size_t, size_t);
-+static void *(*real_realloc)(void *, size_t);
-+
-+/*
-+ * Recursion guard: prevents infinite loops when dlsym/malloc call
-+ * each other during constructor initialization.
-+ *
-+ * Also acts as an "initialized" flag: if 0, we're not yet initialized
-+ * and must use the early allocation buffer.
-+ */
-+static __thread int in_interceptor = 0;
-+
-+/*
-+ * Early allocation buffer: used before the constructor runs, when
-+ * real_malloc is still NULL. This is a simple bump allocator.
-+ */
-+static char early_buffer[8192];
-+static size_t early_offset = 0;
-+
-+static void *early_malloc(size_t size) {
-+    /* Align to 16 bytes */
-+    size = (size + 15) & ~(size_t)15;
-+    if (early_offset + size > sizeof(early_buffer)) {
-+        /* Fallback: use raw mmap syscall */
-+        void *result = (void *)syscall(SYS_mmap, NULL, size,
-+                                       PROT_READ | PROT_WRITE,
-+                                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-+        if (result == (void *)-1 || result == MAP_FAILED) {
-+            return NULL;
-+        }
-+        return strip_tag(result);
-+    }
-+    void *ptr = &early_buffer[early_offset];
-+    early_offset += size;
-+    return ptr;
-+}
-+
-+static void *early_calloc(size_t nmemb, size_t size) {
-+    void *ptr = early_malloc(nmemb * size);
-+    if (ptr) {
-+        memset(ptr, 0, nmemb * size);
-+    }
-+    return ptr;
-+}
-+
-+static void *early_realloc(void *ptr, size_t size) {
-+    /* Simple bump allocator: can't realloc, just allocate new */
-+    void *new_ptr = early_malloc(size);
-+    if (new_ptr && ptr) {
-+        /* We don't know the old size, so this is imperfect */
-+        memcpy(new_ptr, ptr, size);
-+    }
-+    return new_ptr;
-+}
-+
-+/*
-+ * Intercept mmap: call real mmap, then strip tag from result.
-+ */
-+__attribute__((visibility("default")))
-+void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-+    if (!real_mmap) {
-+        /* Not initialized yet: use raw syscall */
-+        void *result = (void *)syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
-+        if (result != MAP_FAILED && result != (void *)-1) {
-+            result = strip_tag(result);
-+        }
-+        return result;
-+    }
-+    void *result = real_mmap(addr, length, prot, flags, fd, offset);
-+    if (result != MAP_FAILED) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
-+    if (!real_mmap64) {
-+        void *result = (void *)syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
-+        if (result != MAP_FAILED && result != (void *)-1) {
-+            result = strip_tag(result);
-+        }
-+        return result;
-+    }
-+    void *result = real_mmap64(addr, length, prot, flags, fd, offset);
-+    if (result != MAP_FAILED) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+/*
-+ * Intercept aligned allocations — critical for Zig @alignCast safety.
-+ * These functions return pointers with specific alignment guarantees.
-+ * If the pointer is tagged, Zig's runtime alignment check fails.
-+ */
-+__attribute__((visibility("default")))
-+int posix_memalign(void **memptr, size_t alignment, size_t size) {
-+    if (in_interceptor || !real_posix_memalign) {
-+        void *ptr = early_malloc(size);
-+        if (!ptr) return ENOMEM;
-+        /* Ensure alignment */
-+        uintptr_t addr = (uintptr_t)ptr;
-+        uintptr_t aligned = (addr + alignment - 1) & ~(alignment - 1);
-+        *memptr = strip_tag((void *)aligned);
-+        return 0;
-+    }
-+    in_interceptor = 1;
-+    int ret = real_posix_memalign(memptr, alignment, size);
-+    in_interceptor = 0;
-+    if (ret == 0 && *memptr != NULL) {
-+        *memptr = strip_tag(*memptr);
-+    }
-+    return ret;
-+}
-+
-+__attribute__((visibility("default")))
-+void *aligned_alloc(size_t alignment, size_t size) {
-+    if (in_interceptor || !real_aligned_alloc) {
-+        return early_malloc(size);
-+    }
-+    in_interceptor = 1;
-+    void *result = real_aligned_alloc(alignment, size);
-+    in_interceptor = 0;
-+    if (result != NULL) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *memalign(size_t alignment, size_t size) {
-+    if (in_interceptor || !real_memalign) {
-+        return early_malloc(size);
-+    }
-+    in_interceptor = 1;
-+    void *result = real_memalign(alignment, size);
-+    in_interceptor = 0;
-+    if (result != NULL) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+/*
-+ * Intercept general allocations — prevent tagged pointers from
-+ * entering libuv callback data and other critical paths.
-+ */
-+__attribute__((visibility("default")))
-+void *malloc(size_t size) {
-+    if (in_interceptor || !real_malloc) {
-+        return early_malloc(size);
-+    }
-+    in_interceptor = 1;
-+    void *result = real_malloc(size);
-+    in_interceptor = 0;
-+    if (result != NULL) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *calloc(size_t nmemb, size_t size) {
-+    if (in_interceptor || !real_calloc) {
-+        return early_calloc(nmemb, size);
-+    }
-+    in_interceptor = 1;
-+    void *result = real_calloc(nmemb, size);
-+    in_interceptor = 0;
-+    if (result != NULL) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *realloc(void *ptr, size_t size) {
-+    if (ptr) ptr = strip_tag(ptr);
-+    if (in_interceptor || !real_realloc) {
-+        return early_realloc(ptr, size);
-+    }
-+    in_interceptor = 1;
-+    void *result = real_realloc(ptr, size);
-+    in_interceptor = 0;
-+    if (result != NULL) {
-+        result = strip_tag(result);
-+    }
-+    return result;
-+}
-+
 +static void disable_tagged_addresses(void) {
-+    /*
-+     * Disable kernel-level tagged address ABI for this thread.
-+     * Prevents the kernel from stripping tags on syscalls.
-+     */
-+    long ret = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+    if (ret >= 0) {
-+        prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+    }
++    /* Disable kernel tagged address ABI for this thread */
++    prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
 +}
 +
 +static void disable_heap_tagging(void) {
-+    /*
-+     * Disable heap-level pointer tagging in Bionic's scudo allocator.
-+     */
++    /* Disable Bionic scudo heap pointer tagging */
 +    void *libc = dlopen("libc.so", RTLD_NOW);
 +    if (!libc) return;
 +
@@ -1175,32 +951,7 @@ index 0000000..657ec12
 +    dlclose(libc);
 +}
 +
-+/*
-+ * Constructor with priority 101 to run as early as possible.
-+ * Priority 100 is reserved for the dynamic linker's own init.
-+ *
-+ * This runs BEFORE main() and before any other constructors,
-+ * ensuring tagged pointers are disabled before Bun allocates memory.
-+ */
 +void __attribute__((constructor(101))) android_disable_tagged_pointers(void) {
-+    /*
-+     * Initialize real function pointers FIRST, before any
-+     * other initialization that might trigger allocation calls.
-+     *
-+     * IMPORTANT: dlsym may internally call malloc, which would
-+     * trigger our interceptor. The in_interceptor guard and
-+     * early_malloc fallback handle this case.
-+     */
-+    real_mmap = dlsym(RTLD_NEXT, "mmap");
-+    real_mmap64 = dlsym(RTLD_NEXT, "mmap64");
-+    real_posix_memalign = dlsym(RTLD_NEXT, "posix_memalign");
-+    real_aligned_alloc = dlsym(RTLD_NEXT, "aligned_alloc");
-+    real_memalign = dlsym(RTLD_NEXT, "memalign");
-+    real_malloc = dlsym(RTLD_NEXT, "malloc");
-+    real_calloc = dlsym(RTLD_NEXT, "calloc");
-+    real_realloc = dlsym(RTLD_NEXT, "realloc");
-+
-+    /* Then disable tagged pointers */
 +    disable_tagged_addresses();
 +    disable_heap_tagging();
 +}
