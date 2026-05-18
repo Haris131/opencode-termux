@@ -72,6 +72,20 @@ index 04afe96..07a91d1 100644
      mod.addImport("translated-c-headers", b.createModule(.{ .root_source_file = translate_c }));
  
      const zlib_internal_path = switch (os) {
+diff --git a/cmake/CSources.txt b/cmake/CSources.txt
+index 67bf951..4399a8e 100644
+--- a/cmake/CSources.txt
++++ b/cmake/CSources.txt
+@@ -8,4 +8,6 @@ packages/bun-usockets/src/quic.c
+ packages/bun-usockets/src/socket.c
+ packages/bun-usockets/src/udp.c
+ src/bun.js/bindings/uv-posix-polyfills.c
+-src/bun.js/bindings/uv-posix-stubs.c
+\ No newline at end of file
++src/bun.js/bindings/uv-posix-stubs.c
++src/android_tls_align.c
++src/android_disable_tags.c
+\ No newline at end of file
 diff --git a/cmake/CompilerFlags.cmake b/cmake/CompilerFlags.cmake
 index c321c75..142d228 100644
 --- a/cmake/CompilerFlags.cmake
@@ -813,7 +827,7 @@ index 8f97d4f..52a9cba 100644
 -        _ = std.c.sigaction(@intFromEnum(sig), &sa, null);
 +        // Use std.posix.sigaction which handles the Android/Bionic ABI mismatch
 +        // (Bionic's struct sigaction is 32 bytes vs Zig's 152 bytes)
-+        std.posix.sigaction(@intCast(@intFromEnum(sig)), &sa, null);
++        std.posix.sigaction(@truncate(@intFromEnum(sig)), &sa, null);
      }
  
      // kill self
@@ -874,33 +888,48 @@ index 267d1f8..dcc64b7 100644
          };
  
          _ = string_builder.append(std.mem.asBytes(&offsets));
-
 diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
 new file mode 100644
-index 0000000..c4d5e6f
+index 0000000..657ec12
 --- /dev/null
 +++ b/src/android_disable_tags.c
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,202 @@
 +/*
 + * android_disable_tags.c
 + *
 + * Built-in workaround for Android tagged pointer (TBI/MTE) crashes.
++ * Runs as an early constructor to disable tagged pointers BEFORE any
++ * Bun allocations occur, eliminating the need for LD_PRELOAD.
 + *
-+ * Uses .preinit_array to run BEFORE dynamic linker initialization,
-+ * then intercepts mmap/mmap64/mremap to strip tags from all allocations.
++ * The "Pointer tag for 0x... was truncated" SIGABRT occurs because:
++ * 1. Android 11+ enables Top-byte Ignore (TBI) pointer tagging on ARM64
++ * 2. JSC JIT allocates large mmap regions (32MB+) that get tagged
++ * 3. Bun's Zig code doesn't handle tagged pointers
++ * 4. When tagged pointers reach syscalls, kernel strips tags causing
++ *    scudo allocator to detect tag mismatch and abort
++ *
++ * The "incorrect alignment" panic occurs because:
++ * - Aligned allocations (posix_memalign, aligned_alloc) return tagged pointers
++ * - Zig's @alignCast runtime check fails on tagged pointers stored in
++ *   libuv callback data or mmap'd regions
++ *
++ * This file is compiled and linked into the Bun binary for Android.
 + */
 +
 +#if defined(__ANDROID__) && defined(__aarch64__)
 +
 +#include <dlfcn.h>
++#include <stdlib.h>
 +#include <sys/mman.h>
 +#include <sys/prctl.h>
-+#include <sys/syscall.h>
 +#include <unistd.h>
 +#include <errno.h>
 +
 +#ifndef PR_SET_TAGGED_ADDR_CTRL
 +#define PR_SET_TAGGED_ADDR_CTRL 55
++#endif
++#ifndef PR_GET_TAGGED_ADDR_CTRL
++#define PR_GET_TAGGED_ADDR_CTRL 56
 +#endif
 +#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
 +#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
@@ -914,26 +943,116 @@ index 0000000..c4d5e6f
 +    return (void *)((unsigned long)p & 0x00FFFFFFFFFFFFFFUL);
 +}
 +
-+/* Real function pointers — resolved in constructor */
++/* Real function pointers — initialized in constructor */
 +static void *(*real_mmap)(void *, size_t, int, int, int, off_t);
 +static void *(*real_mmap64)(void *, size_t, int, int, int, off64_t);
-+static void *(*real_mremap)(void *, size_t, size_t, int, ...);
++static int (*real_posix_memalign)(void **, size_t, size_t);
++static void *(*real_aligned_alloc)(size_t, size_t);
++static void *(*real_memalign)(size_t, size_t);
++static void *(*real_malloc)(size_t);
++static void *(*real_calloc)(size_t, size_t);
++static void *(*real_realloc)(void *, size_t);
 +
-+/* ============================================================
-+ * Layer 1: .preinit_array — runs BEFORE dynamic linker init
-+ * ============================================================ */
-+
-+static void __attribute__((used, section(".preinit_array")))
-+preinit_disable_tagged_pointers(void) {
-+    /* Disable kernel tagged pointer ABI via raw syscall — no libc needed */
-+    syscall(SYS_prctl, PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++/*
++ * Intercept mmap: call real mmap, then strip tag from result.
++ */
++__attribute__((visibility("default")))
++void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
++    void *result = real_mmap(addr, length, prot, flags, fd, offset);
++    if (result != MAP_FAILED) {
++        result = strip_tag(result);
++    }
++    return result;
 +}
 +
-+/* ============================================================
-+ * Layer 2: constructor(101) — disable heap tagging, resolve functions
-+ * ============================================================ */
++__attribute__((visibility("default")))
++void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
++    void *result = real_mmap64(addr, length, prot, flags, fd, offset);
++    if (result != MAP_FAILED) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++/*
++ * Intercept aligned allocations — critical for Zig @alignCast safety.
++ * These functions return pointers with specific alignment guarantees.
++ * If the pointer is tagged, Zig's runtime alignment check fails.
++ */
++__attribute__((visibility("default")))
++int posix_memalign(void **memptr, size_t alignment, size_t size) {
++    int ret = real_posix_memalign(memptr, alignment, size);
++    if (ret == 0 && *memptr != NULL) {
++        *memptr = strip_tag(*memptr);
++    }
++    return ret;
++}
++
++__attribute__((visibility("default")))
++void *aligned_alloc(size_t alignment, size_t size) {
++    void *result = real_aligned_alloc(alignment, size);
++    if (result != NULL) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++__attribute__((visibility("default")))
++void *memalign(size_t alignment, size_t size) {
++    void *result = real_memalign(alignment, size);
++    if (result != NULL) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++/*
++ * Intercept general allocations — prevent tagged pointers from
++ * entering libuv callback data and other critical paths.
++ */
++__attribute__((visibility("default")))
++void *malloc(size_t size) {
++    void *result = real_malloc(size);
++    if (result != NULL) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++__attribute__((visibility("default")))
++void *calloc(size_t nmemb, size_t size) {
++    void *result = real_calloc(nmemb, size);
++    if (result != NULL) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++__attribute__((visibility("default")))
++void *realloc(void *ptr, size_t size) {
++    if (ptr) ptr = strip_tag(ptr);
++    void *result = real_realloc(ptr, size);
++    if (result != NULL) {
++        result = strip_tag(result);
++    }
++    return result;
++}
++
++static void disable_tagged_addresses(void) {
++    /*
++     * Disable kernel-level tagged address ABI for this thread.
++     * Prevents the kernel from stripping tags on syscalls.
++     */
++    long ret = prctl(PR_GET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++    if (ret >= 0) {
++        prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++    }
++}
 +
 +static void disable_heap_tagging(void) {
++    /*
++     * Disable heap-level pointer tagging in Bionic's scudo allocator.
++     */
 +    void *libc = dlopen("libc.so", RTLD_NOW);
 +    if (!libc) return;
 +
@@ -947,64 +1066,73 @@ index 0000000..c4d5e6f
 +        int level = M_HEAP_TAGGING_LEVEL_NONE;
 +        android_mallopt_fn(8, &level, sizeof(level));
 +    }
-+    /* Keep libc open */
++    dlclose(libc);
 +}
 +
-+static void resolve_functions(void) {
-+    void *libc = dlopen("libc.so", RTLD_NOW);
-+    if (!libc) return;
-+    real_mmap = dlsym(libc, "mmap");
-+    real_mmap64 = dlsym(libc, "mmap64");
-+    real_mremap = dlsym(libc, "mremap");
-+}
++/*
++ * Constructor with priority 101 to run as early as possible.
++ * Priority 100 is reserved for the dynamic linker's own init.
++ *
++ * This runs BEFORE main() and before any other constructors,
++ * ensuring tagged pointers are disabled before Bun allocates memory.
++ */
++void __attribute__((constructor(101))) android_disable_tagged_pointers(void) {
++    /*
++     * Initialize real function pointers FIRST, before any
++     * other initialization that might trigger allocation calls.
++     */
++    real_mmap = dlsym(RTLD_NEXT, "mmap");
++    real_mmap64 = dlsym(RTLD_NEXT, "mmap64");
++    real_posix_memalign = dlsym(RTLD_NEXT, "posix_memalign");
++    real_aligned_alloc = dlsym(RTLD_NEXT, "aligned_alloc");
++    real_memalign = dlsym(RTLD_NEXT, "memalign");
++    real_malloc = dlsym(RTLD_NEXT, "malloc");
++    real_calloc = dlsym(RTLD_NEXT, "calloc");
++    real_realloc = dlsym(RTLD_NEXT, "realloc");
 +
-+void __attribute__((constructor(101))) android_disable_tagged_pointers_init(void) {
-+    resolve_functions();
++    /* Then disable tagged pointers */
++    disable_tagged_addresses();
 +    disable_heap_tagging();
 +}
 +
-+/* ============================================================
-+ * Layer 3: Allocation interceptors — strip tags from all returns
-+ * ============================================================ */
-+
-+__attribute__((visibility("default")))
-+void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-+    if (!real_mmap) {
-+        long rc = syscall(SYS_mmap, addr, length, prot, flags, fd, offset);
-+        if (rc < 0 && rc > -4096) { errno = -rc; return MAP_FAILED; }
-+        return strip_tag((void *)rc);
-+    }
-+    void *result = real_mmap(addr, length, prot, flags, fd, offset);
-+    if (result != MAP_FAILED) result = strip_tag(result);
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *mmap64(void *addr, size_t length, int prot, int flags, int fd, off64_t offset) {
-+    if (!real_mmap64) {
-+        long rc = syscall(SYS_mmap2, addr, length, prot, flags, fd, offset >> 12);
-+        if (rc < 0 && rc > -4096) { errno = -rc; return MAP_FAILED; }
-+        return strip_tag((void *)rc);
-+    }
-+    void *result = real_mmap64(addr, length, prot, flags, fd, offset);
-+    if (result != MAP_FAILED) result = strip_tag(result);
-+    return result;
-+}
-+
-+__attribute__((visibility("default")))
-+void *mremap(void *old_address, size_t old_size, size_t new_size, int flags, ...) {
-+    if (!real_mremap) {
-+        long rc = syscall(SYS_mremap, old_address, old_size, new_size, flags);
-+        if (rc < 0 && rc > -4096) { errno = -rc; return MAP_FAILED; }
-+        return strip_tag((void *)rc);
-+    }
-+    void *result = real_mremap(old_address, old_size, new_size, flags);
-+    if (result != MAP_FAILED) result = strip_tag(result);
-+    return result;
-+}
-+
 +#endif /* __ANDROID__ && __aarch64__ */
-
+diff --git a/src/android_tls_align.c b/src/android_tls_align.c
+new file mode 100644
+index 0000000..f801b82
+--- /dev/null
++++ b/src/android_tls_align.c
+@@ -0,0 +1,31 @@
++/**
++ * Android TLS alignment shim.
++ *
++ * On ARM64, Android's Bionic dynamic linker requires the ELF TLS segment
++ * to have p_align >= 64 bytes (to reserve 8 TCB slots before the TLS data).
++ * The Zig linker emits p_align based on the maximum alignment of all TLS
++ * variables, which defaults to 8 for Zig threadlocal variables.
++ *
++ * This file provides a dummy __thread variable with alignment 64, which
++ * forces the linker (lld) to:
++ *   1. Set PT_TLS p_align = 64
++ *   2. Compute tp_offset = round_up(2*sizeof(void*), 64) = 64
++ *   3. Resolve all R_AARCH64_TLSLE_ADD_TPREL relocations with tp_offset=64
++ *
++ * Without this, the Zig linker would emit p_align=8, lld would compute
++ * tp_offset=16, and all TLS accesses would collide with Bionic's TCB slots,
++ * corrupting critical runtime state (DTV, thread_id, scudo allocator, etc.).
++ *
++ * This file MUST be compiled with the Android NDK and linked into the final
++ * binary alongside the Zig object file.
++ */
++
++#if defined(__ANDROID__) && defined(__aarch64__)
++__attribute__((aligned(64)))
++static __thread char _android_tls_align_dummy[64];
++
++/* Prevent the compiler from optimizing away the variable */
++void *_android_tls_align_anchor(void) {
++    return (void *)_android_tls_align_dummy;
++}
++#endif
 diff --git a/src/android_tls_align.s b/src/android_tls_align.s
 new file mode 100644
 index 0000000..6ea310b
@@ -1038,7 +1166,6 @@ index 0000000..6ea310b
 +.size _android_tls_align_force,64
 +_android_tls_align_force:
 +.zero 64
-
 diff --git a/src/bun.js/bindings/ZigGlobalObject.cpp b/src/bun.js/bindings/ZigGlobalObject.cpp
 index 5e534e5..e60230d 100644
 --- a/src/bun.js/bindings/ZigGlobalObject.cpp
@@ -1249,10 +1376,19 @@ diff --git a/src/bun.js/node/node_fs.zig b/src/bun.js/node/node_fs.zig
 index 1fa1bd7..53dac4f 100644
 --- a/src/bun.js/node/node_fs.zig
 +++ b/src/bun.js/node/node_fs.zig
+@@ -3417,7 +3417,7 @@ pub const NodeFS = struct {
+     pub fn uv_close(_: *NodeFS, args: Arguments.Close, rc: i64) Maybe(Return.Close) {
+         if (rc < 0) {
+             return Maybe(Return.Close){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .close,
+                 .fd = args.fd,
+                 .from_libuv = true,
 @@ -3864,6 +3864,11 @@ pub const NodeFS = struct {
              return Maybe(Return.Lchmod).todo();
          }
-
+ 
 +        if (comptime Environment.isAndroid) {
 +            // Android/Bionic doesn't have lchmod. Return ENOSYS (same behavior as Linux glibc).
 +            return .{ .err = .{ .errno = @intFromEnum(std.posix.E.NOSYS), .syscall = .lchmod } };
@@ -1261,6 +1397,91 @@ index 1fa1bd7..53dac4f 100644
          const path = args.path.sliceZ(&this.sync_error_buf);
          return Maybe(Return.Lchmod).errnoSysP(c.lchmod(path, @truncate(args.mode)), .lchmod, path) orelse
              Maybe(Return.Lchmod).success;
+@@ -4190,19 +4195,19 @@ pub const NodeFS = struct {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Open){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .open,
+                 .path = args.path.slice(),
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Open).initResult(.fromUV(@intCast(rc)));
++        return Maybe(Return.Open).initResult(.fromUV(@truncate(rc)));
+     }
+ 
+     pub fn uv_statfs(_: *NodeFS, args: Arguments.StatFS, req: *uv.fs_t, rc: i64) Maybe(Return.StatFS) {
+         if (rc < 0) {
+             return Maybe(Return.StatFS){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .open,
+                 .path = args.path.slice(),
+                 .from_libuv = true,
+@@ -4263,26 +4268,26 @@ pub const NodeFS = struct {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Read){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .read,
+                 .fd = args.fd,
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Read).initResult(.{ .bytes_read = @intCast(rc) });
++        return Maybe(Return.Read).initResult(.{ .bytes_read = @truncate(rc) });
+     }
+ 
+     pub fn uv_readv(this: *NodeFS, args: Arguments.Readv, rc: i64) Maybe(Return.Readv) {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Readv){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .readv,
+                 .fd = args.fd,
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Readv).initResult(.{ .bytes_read = @intCast(rc) });
++        return Maybe(Return.Readv).initResult(.{ .bytes_read = @truncate(rc) });
+     }
+ 
+     pub fn readv(this: *NodeFS, args: Arguments.Readv, _: Flavor) Maybe(Return.Readv) {
+@@ -4307,26 +4312,26 @@ pub const NodeFS = struct {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Write){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .write,
+                 .fd = args.fd,
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Write).initResult(.{ .bytes_written = @intCast(rc) });
++        return Maybe(Return.Write).initResult(.{ .bytes_written = @truncate(rc) });
+     }
+ 
+     pub fn uv_writev(this: *NodeFS, args: Arguments.Writev, rc: i64) Maybe(Return.Writev) {
+         _ = this;
+         if (rc < 0) {
+             return Maybe(Return.Writev){ .err = .{
+-                .errno = @intCast(-rc),
++                .errno = @truncate(-rc),
+                 .syscall = .writev,
+                 .fd = args.fd,
+                 .from_libuv = true,
+             } };
+         }
+-        return Maybe(Return.Writev).initResult(.{ .bytes_written = @intCast(rc) });
++        return Maybe(Return.Writev).initResult(.{ .bytes_written = @truncate(rc) });
+     }
+ 
+     fn writeInner(_: *NodeFS, args: Arguments.Write) Maybe(Return.Write) {
 diff --git a/src/bun.js/node/node_os.zig b/src/bun.js/node/node_os.zig
 index f5790e3..4fadcc0 100644
 --- a/src/bun.js/node/node_os.zig
@@ -1905,25 +2126,18 @@ index 4187c86..51669c0 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/sys.zig b/src/sys.zig
-index 5f14200..b2c3d4e 100644
+index 5f14200..5d94cc7 100644
 --- a/src/sys.zig
 +++ b/src/sys.zig
-@@ -2969,8 +2969,13 @@ pub fn memfd_create(name: [:0]const u8, flags: u32) Maybe(bun.FileDescriptor) {
-     if (comptime !Environment.isLinux) @compileError("linux only!");
-
-+    if (comptime Environment.isAndroid) {
-+        // Android seccomp may block memfd_create in app processes (Termux).
-+        // Return EACCES so the caller falls back to shm_open or temp files.
-+        return .{ .err = .{ .errno = @intFromEnum(E.ACCES), .syscall = .memfd_create } };
-+    }
-     const rc = std.os.linux.memfd_create(name, flags);
-
-     log("memfd_create({s}, {d}) = {d}", .{ name, flags, rc });
-
-     return Maybe(bun.FileDescriptor).errnoSys(rc, .memfd_create) orelse
-         .{ .result = .fromNative(@intCast(rc)) };
+@@ -2095,7 +2095,7 @@ pub fn pread(fd: bun.FileDescriptor, buf: []u8, offset: i64) Maybe(usize) {
+     }
  }
-
+ 
+-const pwrite_sym = if (builtin.os.tag == .linux and builtin.link_libc and !bun.Environment.isMusl)
++const pwrite_sym = if (builtin.os.tag == .linux and builtin.link_libc and !bun.Environment.isMusl and !bun.Environment.isAndroid)
+     libc.pwrite64
+ else
+     syscall.pwrite;
 diff --git a/src/test/recover.zig b/src/test/recover.zig
 index 92f881c..1113bd3 100644
 --- a/src/test/recover.zig
