@@ -827,7 +827,7 @@ index 8f97d4f..52a9cba 100644
 -        _ = std.c.sigaction(@intFromEnum(sig), &sa, null);
 +        // On Android, bypass std.c.sigaction (wrong struct size for Bionic)
 +        // and std.posix.sigaction (u6 parameter limits signal to 0-63).
-+        _ = std.os.linux.syscall4(.rt_sigaction, @intFromEnum(sig), @intFromPtr(&sa), @intFromPtr(@as(?*std.os.linux.Sigaction, null)), @sizeOf(std.posix.sigset_t));
++        _ = std.os.linux.syscall4(.rt_sigaction, @intFromEnum(sig), @intFromPtr(&sa), 0, @sizeOf(std.posix.sigset_t));
      }
  
      // kill self
