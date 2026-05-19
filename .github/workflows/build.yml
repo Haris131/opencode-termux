@@ -301,7 +301,7 @@ jobs:
             ${{ env.WORK_DIR }}/packages/*.zip
             ${{ env.WORK_DIR }}/packages/*.pkg.tar.xz
             ${{ env.WORK_DIR }}/packages/*.deb
-            ${{ env.WORK_DIR }}/bun-build/bun
+            ${{ env.WORK_DIR }}/bun-build/*
           body: |
             ## OpenCode ${{ env.OPENCODE_VERSION }} for Android/Termux (aarch64)
 
