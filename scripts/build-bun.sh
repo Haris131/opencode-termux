@@ -72,11 +72,12 @@ cmake \
     -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BUN_TOOLCHAIN" \
     -DANDROID_NDK_HOME="$ANDROID_NDK_HOME" \
-    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DENABLE_LTO=OFF \
     -DBUN_LINK_ONLY=OFF \
     -DWEBKIT_LOCAL=ON \
     -DWEBKIT_PATH="$WEBKIT_OUTPUT" \
+    -DZIG_OPTIMIZE=ReleaseSafe \
     "$BUN_SRC"
 
 echo ""
@@ -144,10 +145,10 @@ ninja -j"$JOBS" 2>&1 || {
 }
 
 # Verify output
-BUN_BINARY="$BUN_BUILD/bun"
+# Prefer bun-profile (unstripped with debug symbols) over stripped bun
+BUN_BINARY="$BUN_BUILD/bun-profile"
 if [ ! -f "$BUN_BINARY" ]; then
-    # Try bun-profile (unstripped)
-    BUN_BINARY="$BUN_BUILD/bun-profile"
+    BUN_BINARY="$BUN_BUILD/bun"
 fi
 
 if [ ! -f "$BUN_BINARY" ]; then
@@ -160,3 +161,8 @@ echo "=== Bun build complete ==="
 echo "Binary: $BUN_BINARY"
 echo "Size: $(du -h "$BUN_BINARY" | cut -f1)"
 file "$BUN_BINARY"
+echo ""
+echo "To debug panics, run on device:"
+echo "  ZIG_BACKTRACE=1 ./$(basename "$BUN_BINARY") 2>&1 | head -100"
+echo "Or with lldb:"
+echo "  lldb -o 'run' -o 'bt' -o 'thread backtrace all' -- ./$(basename "$BUN_BINARY")"
