@@ -2064,3 +2064,39 @@ index 7d8ef7c..0d8f40f 100644
  
      // On linux, bun overrides the libc symbols for various functions.
      // This is to compensate for older glibc versions.
+diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
+--- a/src/resolver/resolver.zig
++++ b/src/resolver/resolver.zig
+@@ -2853,12 +2853,18 @@
+                     // where people try to import from a path containing a file as a parent
+                     // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
+                     // list which contains such paths and treating them as missing means we just
+-                    // ignore them during path resolution.
++                    // ignore them during path resolution. On Android/Termux (non-root), the
++                    // directories /data/ and /data/data/ cannot be listed by unprivileged
++                    // processes (EACCES). The resolver walks up from the CWD looking for
++                    // node_modules, so it will hit these restricted directories. Treat
++                    // AccessDenied like FileNotFound to prevent spurious error messages.
+                     error.ENOENT,
+                     error.ENOTDIR,
+                     error.IsDir,
+                     error.NotDir,
+                     error.FileNotFound,
++                    error.EACCES,
++                    error.AccessDenied,
+                     => return null,
+ 
+                     else => {
+@@ -3811,7 +3817,11 @@
+         };
+ 
+         if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
+-            if (dir_entry.err.original_err != error.ENOENT) {
++            // On Android/Termux, /data and /data/data return EACCES for
++            // unprivileged processes -- treat like ENOENT (silently ignore).
++            if (dir_entry.err.original_err != error.ENOENT and
++                dir_entry.err.original_err != error.EACCES and
++                dir_entry.err.original_err != error.AccessDenied) {
+                 r.log.addErrorFmt(
+                     null,
+                     logger.Loc.Empty,
