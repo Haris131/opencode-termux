@@ -820,14 +820,16 @@ diff --git a/src/Global.zig b/src/Global.zig
 index 8f97d4f..52a9cba 100644
 --- a/src/Global.zig
 +++ b/src/Global.zig
-@@ -149,7 +149,9 @@ pub fn raiseIgnoringPanicHandler(sig: bun.SignalCode) noreturn {
+@@ -149,7 +149,11 @@ pub fn raiseIgnoringPanicHandler(sig: bun.SignalCode) noreturn {
              .mask = std.posix.empty_sigset,
              .flags = std.posix.SA.RESETHAND,
          };
 -        _ = std.c.sigaction(@intFromEnum(sig), &sa, null);
-+        // On Android, bypass std.c.sigaction (wrong struct size for Bionic)
-+        // and std.posix.sigaction (u6 parameter limits signal to 0-63).
-+        _ = std.os.linux.syscall4(.rt_sigaction, @intFromEnum(sig), @intFromPtr(&sa), 0, @sizeOf(std.posix.sigset_t));
++        // Skip sigaction on Android to avoid Bionic ABI mismatch (32 vs 152 bytes)
++        // and u6 parameter limit. The signal will still be raised below.
++        if (!bun.Environment.isAndroid) {
++            _ = std.c.sigaction(@intFromEnum(sig), &sa, null);
++        }
      }
  
      // kill self
