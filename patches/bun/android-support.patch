@@ -297,7 +297,7 @@ index c960084..aa591ff 100644
  register_repository(
    NAME
      picohttpparser
-@@ -699,6 +724,14 @@ if(NOT bun STREQUAL "bun")
+@@ -699,6 +724,27 @@ if(NOT bun STREQUAL "bun")
    add_custom_target(bun DEPENDS ${bun})
  endif()
  
@@ -307,6 +307,19 @@ index c960084..aa591ff 100644
 +  add_dependencies(${bun} android-tls-align)
 +  target_link_libraries(${bun} PRIVATE ${ANDROID_TLS_ALIGN_OBJ})
 +  target_link_options(${bun} PRIVATE "LINKER:--undefined=_android_tls_align_force")
++  # --whole-archive is required for WebKit static libraries.
++  # WebKit's JS_EXPORT/WTF_EXPORT macros apply visibility("default") to symbols
++  # when BUILDING_JSCONLY__ is defined, but the CMake target may still set
++  # VISIBILITY_INLINES_HIDDEN or other properties that hide symbols.
++  # --whole-archive forces the linker to include ALL object files from the
++  # static libraries, ensuring all JSC runtime symbols are available.
++  target_link_options(${bun} PRIVATE
++    "LINKER:--whole-archive"
++    "${WEBKIT_LIB_PATH}/libJavaScriptCore.a"
++    "${WEBKIT_LIB_PATH}/libWTF.a"
++    "${WEBKIT_LIB_PATH}/libbmalloc.a"
++    "LINKER:--no-whole-archive"
++  )
 +endif()
 +
  # --- C/C++ Properties ---
