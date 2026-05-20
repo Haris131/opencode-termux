@@ -54,12 +54,15 @@ cmake \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_TMP" \
     -DPORT=JSCOnly \
     -DENABLE_STATIC_JSC=ON \
+    -DENABLE_SHARED_JSC=OFF \
     -DCMAKE_BUILD_TYPE=Release \
     -DUSE_THIN_ARCHIVES=OFF \
     -DUSE_BUN_JSC_ADDITIONS=ON \
     -DUSE_BUN_EVENT_LOOP=ON \
     -DENABLE_BUN_SKIP_FAILING_ASSERTIONS=ON \
     -DENABLE_FTL_JIT=ON \
+    -DENABLE_DFG_JIT=ON \
+    -DENABLE_JIT=ON \
     -DENABLE_REMOTE_INSPECTOR=ON \
     -DALLOW_LINE_AND_COLUMN_NUMBER_IN_BUILTINS=ON \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
@@ -75,7 +78,10 @@ cmake \
 echo ""
 echo ">>> Configure complete. Building..."
 
-# Build JSC target
+# Build JavaScriptCore library target (includes all runtime symbols Bun needs)
+cmake --build "$WEBKIT_BUILD" --config Release --target JavaScriptCore -- -j"$JOBS"
+
+# Build jsc target (shell executable, ensures all dependencies are built)
 cmake --build "$WEBKIT_BUILD" --config Release --target jsc -- -j"$JOBS"
 
 # Build private headers
