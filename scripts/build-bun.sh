@@ -72,12 +72,12 @@ cmake \
     -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BUN_TOOLCHAIN" \
     -DANDROID_NDK_HOME="$ANDROID_NDK_HOME" \
-    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DCMAKE_BUILD_TYPE=Debug \
     -DENABLE_LTO=OFF \
     -DBUN_LINK_ONLY=OFF \
     -DWEBKIT_LOCAL=ON \
     -DWEBKIT_PATH="$WEBKIT_OUTPUT" \
-    -DZIG_OPTIMIZE=ReleaseSafe \
+    -DZIG_OPTIMIZE=Debug \
     "$BUN_SRC"
 
 echo ""
