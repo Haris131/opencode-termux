@@ -225,10 +225,11 @@ jobs:
         if: steps.cache-bun.outputs.cache-hit != 'true'
         run: |
           source scripts/env.sh
-          # Need to clone + patch if only bun cache missed but webkit didn't
-          if [ ! -d "$BUN_SRC/.git" ]; then
-            ./scripts/apply-patches.sh
-          fi
+          # Always ensure patches are applied before building.
+          # apply-patches.sh is idempotent (git checkout -- . before git apply).
+          # The source tree may exist (from a previous run that wasn't fully cleaned)
+          # but without patches applied, or with stale/outdated patches.
+          ./scripts/apply-patches.sh
           ./scripts/build-bun.sh
 
       - name: Verify Bun binary
