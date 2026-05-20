@@ -330,7 +330,15 @@ index c960084..aa591ff 100644
    if(DEBUG)
      # TODO: this shouldn't be necessary long term
      if (NOT ABI STREQUAL "musl")
-@@ -880,6 +918,7 @@ if(NOT WIN32)
+@@ -862,6 +880,7 @@ if(NOT WIN32)
+       -Wno-unused-function
+       -Wno-c++23-lambda-attributes
+       -Wno-nullability-completeness
++      -Wno-undefined-var-template
+       -Werror
+     )
+   else()
+@@ -880,6 +899,7 @@ if(NOT WIN32)
        -Werror=sometimes-uninitialized
        -Wno-c++23-lambda-attributes
        -Wno-nullability-completeness
