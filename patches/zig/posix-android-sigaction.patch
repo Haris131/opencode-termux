@@ -1,9 +1,11 @@
 --- a/vendor/zig/lib/std/posix.zig
 +++ b/vendor/zig/lib/std/posix.zig
-@@ -5787,23 +5787,45 @@
+@@ -5784,26 +5784,50 @@
+     }
+ }
  
  /// Examine and change a signal action.
- pub fn sigaction(sig: u6, noalias act: ?*const Sigaction, noalias oact: ?*Sigaction) void {
+-pub fn sigaction(sig: u6, noalias act: ?*const Sigaction, noalias oact: ?*Sigaction) void {
 -    switch (errno(system.sigaction(sig, act, oact))) {
 -        .SUCCESS => return,
 -        // EINVAL means the signal is either invalid or some signal that cannot have its action
@@ -11,23 +13,19 @@
 -        // non-standard SIGWAITING, SIGCANCEL, and SIGLWP. Either way, programmer error.
 -        // .INVAL => unreachable,
 -        else => unreachable,
-+    // On Android/Bionic, the libc sigaction() expects a different struct layout
-+    // (32 bytes with different field order and 8-byte sigset_t) than Zig's
-+    // linux.Sigaction (152 bytes with 128-byte sigset_t). Bypass libc and use
-+    // the raw rt_sigaction syscall which correctly handles the conversion
-+    // from Sigaction to the kernel's k_sigaction struct.
++pub fn sigaction(sig: u6, noalias act: ?*const Sigaction, noalias oact: ?*Sigaction) void {
 +    if (comptime builtin.abi.isAndroid()) {
-+        switch (E.init(linux.sigaction(sig, act, oact))) {
++        // On Android/Bionic, bypass libc entirely. The kernel's rt_sigaction
++        // syscall accepts any signal number including real-time signals (32-64).
++        // We widen to u8 since the caller may pass values > 63 via @intFromEnum.
++        const rc = linux.syscall4(.rt_sigaction, @as(u8, sig), @intFromPtr(act), @intFromPtr(oact), @sizeOf(Sigaction));
++        switch (E.init(rc)) {
 +            .SUCCESS => return,
 +            else => unreachable,
 +        }
 +    } else {
 +        switch (errno(system.sigaction(sig, act, oact))) {
 +            .SUCCESS => return,
-+            // EINVAL means the signal is either invalid or some signal that cannot have its action
-+            // changed. For POSIX, this means SIGKILL/SIGSTOP. For e.g. Solaris, this also includes the
-+            // non-standard SIGWAITING, SIGCANCEL, and SIGLWP. Either way, programmer error.
-+            // .INVAL => unreachable,
 +            else => unreachable,
 +        }
      }
@@ -40,21 +38,18 @@
 -        // .FAULT => unreachable,
 -        // .INVAL => unreachable,
 -        else => unreachable,
-+    // On Android/Bionic, the libc sigprocmask() expects an 8-byte sigset_t
-+    // but Zig's linux.sigset_t is 128 bytes. Bypass libc and use the raw
-+    // rt_sigprocmask syscall directly.
 +    if (comptime builtin.abi.isAndroid()) {
-+        switch (E.init(linux.sigprocmask(flags, set, oldset))) {
++        // On Android/Bionic, bypass libc. The kernel's rt_sigprocmask syscall
++        // accepts sigset_t of any size; we pass the full Zig sigset_t size.
++        const rc = linux.syscall4(.rt_sigprocmask, flags, @intFromPtr(set), @intFromPtr(oldset), @sizeOf(sigset_t));
++        switch (E.init(rc)) {
 +            .SUCCESS => return,
 +            else => unreachable,
 +        }
 +    } else {
 +        switch (errno(system.sigprocmask(@bitCast(flags), set, oldset))) {
 +            .SUCCESS => return,
-+            // .FAULT => unreachable,
-+            // .INVAL => unreachable,
 +            else => unreachable,
 +        }
      }
  }
- 
