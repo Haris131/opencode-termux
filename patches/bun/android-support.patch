@@ -642,81 +642,6 @@ index c9d9d24..2df0e9b 100644
  )
  
  target_link_libraries(${bun} PRIVATE ${LOLHTML_LIBRARY})
-diff --git a/cmake/toolchains/android-aarch64.cmake b/cmake/toolchains/android-aarch64.cmake
-new file mode 100644
-index 0000000..941c032
---- /dev/null
-+++ b/cmake/toolchains/android-aarch64.cmake
-@@ -0,0 +1,69 @@
-+# Android aarch64 cross-compilation toolchain for Bun
-+# Uses Android NDK clang toolchain targeting Bionic libc
-+
-+set(CMAKE_SYSTEM_NAME Android)
-+set(CMAKE_SYSTEM_PROCESSOR aarch64)
-+set(ABI android)
-+
-+# Android API level (24 = Android 7.0 Nougat — minimum for 64-bit Termux)
-+set(ANDROID_PLATFORM 24)
-+set(ANDROID_API_LEVEL 24)
-+set(CMAKE_SYSTEM_VERSION ${ANDROID_API_LEVEL})
-+set(CMAKE_ANDROID_ARCH_ABI arm64-v8a)
-+
-+# NDK path — override with -DANDROID_NDK_HOME=<path> if needed
-+# Must survive re-processing in try_compile contexts
-+if(NOT DEFINED ANDROID_NDK_HOME)
-+  if(DEFINED CMAKE_ANDROID_NDK)
-+    set(ANDROID_NDK_HOME "${CMAKE_ANDROID_NDK}")
-+  elseif(DEFINED ENV{ANDROID_NDK_HOME})
-+    set(ANDROID_NDK_HOME "$ENV{ANDROID_NDK_HOME}")
-+  elseif(DEFINED ENV{ANDROID_NDK})
-+    set(ANDROID_NDK_HOME "$ENV{ANDROID_NDK}")
-+  else()
-+    message(FATAL_ERROR "ANDROID_NDK_HOME is not set. Point it to your Android NDK installation.")
-+  endif()
-+endif()
-+
-+# Ensure this variable is forwarded to try_compile() sub-projects
-+list(APPEND CMAKE_TRY_COMPILE_PLATFORM_VARIABLES ANDROID_NDK_HOME)
-+
-+set(CMAKE_ANDROID_NDK ${ANDROID_NDK_HOME})
-+
-+set(NDK_TOOLCHAIN "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64")
-+set(NDK_SYSROOT "${NDK_TOOLCHAIN}/sysroot")
-+set(ANDROID_TRIPLE "aarch64-linux-android")
-+set(ANDROID_TRIPLE_API "${ANDROID_TRIPLE}${ANDROID_API_LEVEL}")
-+
-+# Tell CMake to use the NDK sysroot
-+set(CMAKE_SYSROOT "${NDK_SYSROOT}")
-+
-+# Set compilers from NDK
-+set(CMAKE_C_COMPILER "${NDK_TOOLCHAIN}/bin/${ANDROID_TRIPLE_API}-clang")
-+set(CMAKE_CXX_COMPILER "${NDK_TOOLCHAIN}/bin/${ANDROID_TRIPLE_API}-clang++")
-+set(CMAKE_ASM_COMPILER "${NDK_TOOLCHAIN}/bin/${ANDROID_TRIPLE_API}-clang")
-+set(CMAKE_AR "${NDK_TOOLCHAIN}/bin/llvm-ar")
-+set(CMAKE_RANLIB "${NDK_TOOLCHAIN}/bin/llvm-ranlib")
-+set(CMAKE_STRIP "${NDK_TOOLCHAIN}/bin/llvm-strip")
-+set(CMAKE_NM "${NDK_TOOLCHAIN}/bin/llvm-nm")
-+set(CMAKE_LINKER "${NDK_TOOLCHAIN}/bin/ld.lld")
-+set(CMAKE_OBJCOPY "${NDK_TOOLCHAIN}/bin/llvm-objcopy")
-+set(CMAKE_OBJDUMP "${NDK_TOOLCHAIN}/bin/llvm-objdump")
-+
-+# Skip compiler checks — we know the cross compiler works
-+set(CMAKE_C_COMPILER_WORKS ON)
-+set(CMAKE_CXX_COMPILER_WORKS ON)
-+
-+# Search paths: only look in the sysroot for libraries/headers, not on the host
-+set(CMAKE_FIND_ROOT_PATH "${NDK_SYSROOT}")
-+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
-+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
-+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
-+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
-+
-+# Android-specific: position-independent code is required
-+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-+
-+# Flag that downstream cmake files can check
-+set(ANDROID ON)
-+set(ANDROID_BUILD ON)
 diff --git a/cmake/tools/SetupLLVM.cmake b/cmake/tools/SetupLLVM.cmake
 index 7d8cc12..377b81a 100644
 --- a/cmake/tools/SetupLLVM.cmake
@@ -817,7 +742,7 @@ index f4d4bc3..06bc9ae 100644
                  errno = ENAMETOOLONG;
                  return LIBUS_SOCKET_ERROR;
 diff --git a/src/Global.zig b/src/Global.zig
-index 8f97d4f..52a9cba 100644
+index 8f97d4f..e1ba6b6 100644
 --- a/src/Global.zig
 +++ b/src/Global.zig
 @@ -149,7 +149,9 @@ pub fn raiseIgnoringPanicHandler(sig: bun.SignalCode) noreturn {
@@ -888,145 +813,26 @@ index 267d1f8..dcc64b7 100644
          };
  
          _ = string_builder.append(std.mem.asBytes(&offsets));
-diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
-new file mode 100644
-index 0000000..a1b2c3d
---- /dev/null
-+++ b/src/android_disable_tags.c
-@@ -0,0 +1,63 @@
-+/*
-+ * android_disable_tags.c
-+ *
-+ * Disable ARM64 pointer tagging (TBI/MTE) on Android to prevent
-+ * crashes in Bun's Zig code which doesn't handle tagged pointers.
-+ *
-+ * This runs as an early constructor, BEFORE any Bun allocations.
-+ * We disable tagging at the source (kernel + heap allocator) rather
-+ * than intercepting allocation functions, which is fragile and causes
-+ * segfaults when overriding malloc/calloc in the dynamic linker context.
-+ */
-+
-+#if defined(__ANDROID__) && defined(__aarch64__)
-+
-+#include <dlfcn.h>
-+#include <stdlib.h>
-+#include <sys/prctl.h>
-+
-+#ifndef PR_SET_TAGGED_ADDR_CTRL
-+#define PR_SET_TAGGED_ADDR_CTRL 55
-+#endif
-+#ifndef PR_GET_TAGGED_ADDR_CTRL
-+#define PR_GET_TAGGED_ADDR_CTRL 56
-+#endif
-+#ifndef PR_TAGGED_ADDR_ENABLE
-+#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
-+#endif
-+#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
-+#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
-+#endif
-+#ifndef M_HEAP_TAGGING_LEVEL_NONE
-+#define M_HEAP_TAGGING_LEVEL_NONE 0
-+#endif
-+
-+static void disable_tagged_addresses(void) {
-+    /* Disable kernel tagged address ABI for this thread */
-+    prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+}
-+
-+static void disable_heap_tagging(void) {
-+    /* Disable Bionic scudo heap pointer tagging */
-+    void *libc = dlopen("libc.so", RTLD_NOW);
-+    if (!libc) return;
-+
-+    int (*mallopt_fn)(int, int) = dlsym(libc, "mallopt");
-+    if (mallopt_fn) {
-+        mallopt_fn(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
-+    }
-+
-+    int (*android_mallopt_fn)(int, void *, size_t) = dlsym(libc, "android_mallopt");
-+    if (android_mallopt_fn) {
-+        int level = M_HEAP_TAGGING_LEVEL_NONE;
-+        android_mallopt_fn(8, &level, sizeof(level));
-+    }
-+    dlclose(libc);
-+}
-+
-+void __attribute__((constructor(101))) android_disable_tagged_pointers(void) {
-+    disable_tagged_addresses();
-+    disable_heap_tagging();
-+}
-+
-+#endif /* __ANDROID__ && __aarch64__ */
-diff --git a/src/android_tls_align.c b/src/android_tls_align.c
-new file mode 100644
-index 0000000..f801b82
---- /dev/null
-+++ b/src/android_tls_align.c
-@@ -0,0 +1,31 @@
-+/**
-+ * Android TLS alignment shim.
-+ *
-+ * On ARM64, Android's Bionic dynamic linker requires the ELF TLS segment
-+ * to have p_align >= 64 bytes (to reserve 8 TCB slots before the TLS data).
-+ * The Zig linker emits p_align based on the maximum alignment of all TLS
-+ * variables, which defaults to 8 for Zig threadlocal variables.
-+ *
-+ * This file provides a dummy __thread variable with alignment 64, which
-+ * forces the linker (lld) to:
-+ *   1. Set PT_TLS p_align = 64
-+ *   2. Compute tp_offset = round_up(2*sizeof(void*), 64) = 64
-+ *   3. Resolve all R_AARCH64_TLSLE_ADD_TPREL relocations with tp_offset=64
-+ *
-+ * Without this, the Zig linker would emit p_align=8, lld would compute
-+ * tp_offset=16, and all TLS accesses would collide with Bionic's TCB slots,
-+ * corrupting critical runtime state (DTV, thread_id, scudo allocator, etc.).
-+ *
-+ * This file MUST be compiled with the Android NDK and linked into the final
-+ * binary alongside the Zig object file.
-+ */
-+
-+#if defined(__ANDROID__) && defined(__aarch64__)
-+__attribute__((aligned(64)))
-+static __thread char _android_tls_align_dummy[64];
-+
-+/* Prevent the compiler from optimizing away the variable */
-+void *_android_tls_align_anchor(void) {
-+    return (void *)_android_tls_align_dummy;
-+}
-+#endif
-diff --git a/src/android_tls_align.s b/src/android_tls_align.s
-new file mode 100644
-index 0000000..6ea310b
---- /dev/null
-+++ b/src/android_tls_align.s
-@@ -0,0 +1,27 @@
-+// Android TLS alignment fix for ARM64 Bionic.
-+//
-+// Android's Bionic dynamic linker (API 31+/Android 12+) requires the
-+// PT_TLS segment to have p_align >= 64 bytes. This is because Bionic's
-+// Thread Control Block (TCB) uses slots at TPIDR+0..TPIDR+63, and the
-+// TLS segment starts at round_up(sizeof(tcb_head), p_align).
-+//
-+// With p_align=8, the TLS segment starts at TPIDR+16, stomping on
-+// Bionic's TCB slots (including scudo allocator state). With p_align=64,
-+// TLS starts at TPIDR+64, leaving all TCB slots intact.
-+//
-+// The Zig linker emits p_align=8 for .tbss. This assembly file creates
-+// a .tbss section with explicit 64-byte alignment, which forces lld to
-+// compute max(all TLS section alignments) = 64, producing p_align=64
-+// in the PT_TLS program header.
-+//
-+// This MUST be assembled (not compiled as C) to avoid NDK's emulated
-+// TLS (__emutls) which would produce no real .tbss section at all.
-+
-+.section .tbss,"awT",@nobits
-+.balign 64
-+.global _android_tls_align_force
-+.hidden _android_tls_align_force
-+.type _android_tls_align_force,@tls_object
-+.size _android_tls_align_force,64
-+_android_tls_align_force:
-+.zero 64
+diff --git a/src/bun.js/api/bun/socket.zig b/src/bun.js/api/bun/socket.zig
+index 8c24b2b..cf4ba28 100644
+--- a/src/bun.js/api/bun/socket.zig
++++ b/src/bun.js/api/bun/socket.zig
+@@ -781,7 +781,14 @@ pub const Listener = struct {
+                     );
+                     // should return the assigned port
+                     if (socket) |s| {
+-                        connection.host.port = @as(u16, @intCast(s.getLocalPort(ssl_enabled)));
++                        // getLocalPort returns i32; on Android/Bionic it may return
++                        // -1 or other negative values on error. Guard against panic.
++                        const port_raw = s.getLocalPort(ssl_enabled);
++                        if (port_raw >= 0 and port_raw <= 65535) {
++                            connection.host.port = @as(u16, @intCast(port_raw));
++                        } else {
++                            connection.host.port = 0;
++                        }
+                     }
+                     break :brk socket;
+                 },
 diff --git a/src/bun.js/bindings/ZigGlobalObject.cpp b/src/bun.js/bindings/ZigGlobalObject.cpp
 index 5e534e5..e60230d 100644
 --- a/src/bun.js/bindings/ZigGlobalObject.cpp
@@ -1233,6 +1039,22 @@ index daa0f78..39c021b 100644
 +#endif
  
  #endif
+diff --git a/src/bun.js/event_loop.zig b/src/bun.js/event_loop.zig
+index 4ee693d..e92a924 100644
+--- a/src/bun.js/event_loop.zig
++++ b/src/bun.js/event_loop.zig
+@@ -2532,7 +2532,10 @@ pub const PosixSignalHandle = struct {
+     /// Note: Must be minimal logic here. Only do atomics & signal‐safe calls.
+     export fn Bun__onPosixSignal(number: i32) void {
+         const vm = VirtualMachine.getMainThreadVM().?;
+-        _ = vm.eventLoop().signal_handler.?.enqueue(@intCast(number));
++        // On Android, signal numbers could theoretically exceed u8 range
++        // (e.g., corrupted signal delivery or real-time signals > 255).
++        // Use @truncate to avoid panic; the dequeue path handles unknown signals.
++        _ = vm.eventLoop().signal_handler.?.enqueue(@truncate(number));
+     }
+ 
+     /// Called by the main thread (single consumer).
 diff --git a/src/bun.js/node/node_fs.zig b/src/bun.js/node/node_fs.zig
 index 1fa1bd7..53dac4f 100644
 --- a/src/bun.js/node/node_fs.zig
@@ -1911,6 +1733,22 @@ index 6a5dca0..ded884a 100644
          tcc_list_symbols(s, ctx, symbolCb);
      }
  };
+diff --git a/src/deps/uws.zig b/src/deps/uws.zig
+index 16a1386..725335d 100644
+--- a/src/deps/uws.zig
++++ b/src/deps/uws.zig
+@@ -1498,7 +1498,10 @@ pub fn NewSocketHandler(comptime is_ssl: bool) type {
+             return if (comptime Environment.isWindows)
+                 .fromNative(@ptrCast(socket.getNativeHandle(is_ssl).?))
+             else
+-                .fromNative(@intCast(@intFromPtr(socket.getNativeHandle(is_ssl))));
++                // On 64-bit Android, @intFromPtr produces usize (64-bit).
++                // The native handle is a file descriptor stored as a pointer,
++                // so it fits in i32. Use @truncate to avoid panic.
++                .fromNative(@as(i32, @truncate(@intFromPtr(socket.getNativeHandle(is_ssl)))));
+         }
+ 
+         pub fn markNeedsMoreForSendfile(this: ThisSocket) void {
 diff --git a/src/env.zig b/src/env.zig
 index 41364f1..6029059 100644
 --- a/src/env.zig
@@ -1971,7 +1809,7 @@ index b8e8c7b..1de6f2e 100644
      const JSC = bun.JSC;
      pub fn jsFunctionLibcIsMatch(globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSC.JSValue {
 diff --git a/src/linux.zig b/src/linux.zig
-index 4187c86..51669c0 100644
+index 4187c86..093c65e 100644
 --- a/src/linux.zig
 +++ b/src/linux.zig
 @@ -73,6 +73,11 @@ pub fn ioctl_ficlone(dest_fd: bun.FileDescriptor, srcfd: bun.FileDescriptor) usi
@@ -1986,11 +1824,61 @@ index 4187c86..51669c0 100644
      return @bitCast(
          std.os.linux.syscall6(
              .epoll_pwait2,
+diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
+index dbc49a3..a69e238 100644
+--- a/src/resolver/resolver.zig
++++ b/src/resolver/resolver.zig
+@@ -2853,12 +2853,18 @@ pub const Resolver = struct {
+                     // where people try to import from a path containing a file as a parent
+                     // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
+                     // list which contains such paths and treating them as missing means we just
+-                    // ignore them during path resolution.
++                    // ignore them during path resolution. On Android/Termux (non-root), the
++                    // directories /data/ and /data/data/ cannot be listed by unprivileged
++                    // processes (EACCES). The resolver walks up from the CWD looking for
++                    // node_modules, so it will hit these restricted directories. Treat
++                    // AccessDenied like FileNotFound to prevent spurious error messages.
+                     error.ENOENT,
+                     error.ENOTDIR,
+                     error.IsDir,
+                     error.NotDir,
+                     error.FileNotFound,
++                    error.EACCES,
++                    error.AccessDenied,
+                     => return null,
+ 
+                     else => {
+@@ -3811,7 +3817,11 @@ pub const Resolver = struct {
+         };
+ 
+         if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
+-            if (dir_entry.err.original_err != error.ENOENT) {
++            // On Android/Termux, /data and /data/data return EACCES for
++            // unprivileged processes -- treat like ENOENT (silently ignore).
++            if (dir_entry.err.original_err != error.ENOENT and
++                dir_entry.err.original_err != error.EACCES and
++                dir_entry.err.original_err != error.AccessDenied) {
+                 r.log.addErrorFmt(
+                     null,
+                     logger.Loc.Empty,
 diff --git a/src/sys.zig b/src/sys.zig
-index 5f14200..5d94cc7 100644
+index 5f14200..16ef0fe 100644
 --- a/src/sys.zig
 +++ b/src/sys.zig
-@@ -2095,7 +2095,7 @@ pub fn pread(fd: bun.FileDescriptor, buf: []u8, offset: i64) Maybe(usize) {
+@@ -358,8 +358,11 @@ pub const Error = struct {
+     }
+ 
+     pub fn fromCodeInt(errno: anytype, syscall_tag: sys.Tag) Error {
++        // On Android/Bionic, errno values are standard POSIX (< 256), but
++        // guard against unexpected large values from libuv or custom sources.
++        const errno_val = if (Environment.isWindows) @abs(errno) else errno;
+         return .{
+-            .errno = @as(Int, @intCast(if (Environment.isWindows) @abs(errno) else errno)),
++            .errno = @as(Int, @truncate(errno_val)),
+             .syscall = syscall_tag,
+         };
+     }
+@@ -2095,7 +2098,7 @@ pub fn pread(fd: bun.FileDescriptor, buf: []u8, offset: i64) Maybe(usize) {
      }
  }
  
@@ -2064,39 +1952,3 @@ index 7d8ef7c..0d8f40f 100644
  
      // On linux, bun overrides the libc symbols for various functions.
      // This is to compensate for older glibc versions.
-diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
---- a/src/resolver/resolver.zig
-+++ b/src/resolver/resolver.zig
-@@ -2853,12 +2853,18 @@
-                     // where people try to import from a path containing a file as a parent
-                     // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
-                     // list which contains such paths and treating them as missing means we just
--                    // ignore them during path resolution.
-+                    // ignore them during path resolution. On Android/Termux (non-root), the
-+                    // directories /data/ and /data/data/ cannot be listed by unprivileged
-+                    // processes (EACCES). The resolver walks up from the CWD looking for
-+                    // node_modules, so it will hit these restricted directories. Treat
-+                    // AccessDenied like FileNotFound to prevent spurious error messages.
-                     error.ENOENT,
-                     error.ENOTDIR,
-                     error.IsDir,
-                     error.NotDir,
-                     error.FileNotFound,
-+                    error.EACCES,
-+                    error.AccessDenied,
-                     => return null,
- 
-                     else => {
-@@ -3811,7 +3817,11 @@
-         };
- 
-         if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
--            if (dir_entry.err.original_err != error.ENOENT) {
-+            // On Android/Termux, /data and /data/data return EACCES for
-+            // unprivileged processes -- treat like ENOENT (silently ignore).
-+            if (dir_entry.err.original_err != error.ENOENT and
-+                dir_entry.err.original_err != error.EACCES and
-+                dir_entry.err.original_err != error.AccessDenied) {
-                 r.log.addErrorFmt(
-                     null,
-                     logger.Loc.Empty,
