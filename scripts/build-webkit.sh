@@ -16,7 +16,9 @@ source "$SCRIPT_DIR/env.sh"
 TOOLCHAIN="$REPO_ROOT/cmake/webkit-android-toolchain.cmake"
 
 # Compiler flags matching oven-sh/WebKit's Dockerfile
-DEFAULT_CFLAGS="-fno-omit-frame-pointer -ffunction-sections -fdata-sections -faddrsig -DU_STATIC_IMPLEMENTATION=1"
+# STATICALLY_LINKED_WITH_* defines are CRITICAL: they tell WebKit's JS_EXPORT/WTF_EXPORT
+# macros to NOT apply hidden visibility, so symbols are exported from static libraries.
+DEFAULT_CFLAGS="-fno-omit-frame-pointer -ffunction-sections -fdata-sections -faddrsig -DU_STATIC_IMPLEMENTATION=1 -DSTATICALLY_LINKED_WITH_JavaScriptCore=1 -DSTATICALLY_LINKED_WITH_WTF=1 -DSTATICALLY_LINKED_WITH_BMALLOC=1 -DBUILDING_JSCONLY__"
 RELEASE_FLAGS="-O3 -DNDEBUG=1"
 
 echo "=== Building WebKit/JSC for Android aarch64 ==="
