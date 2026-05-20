@@ -120,9 +120,12 @@ fi
 echo ">>> Building Bun (this will take 30-45 minutes)..."
 echo "    .zig-cache -> $(readlink -f "$BUN_SRC/.zig-cache" 2>/dev/null || echo 'NOT A SYMLINK')"
 cd "$BUN_BUILD"
-ninja -j"$JOBS" 2>&1 || {
+ninja -j"$JOBS" -v 2>&1 | tee "$BUN_BUILD/build.log" || {
     echo ""
     echo ">>> Build failed. Checking if Zig was downloaded during the build..."
+    # Print the last 500 lines of the build log for debugging
+    echo ">>> Last 500 lines of build log:"
+    tail -500 "$BUN_BUILD/build.log"
     # If Zig was just downloaded during the build and the patch wasn't applied,
     # apply it now and retry
     if [ -f "$ZIG_POSIX" ] && ! grep -q "comptime builtin.abi.isAndroid()" "$ZIG_POSIX" 2>/dev/null; then
@@ -137,7 +140,7 @@ ninja -j"$JOBS" 2>&1 || {
         mkdir -p "$BUN_BUILD/cache/zig/local" "$BUN_BUILD/cache/zig/global"
         ln -sfn "$BUN_BUILD/cache/zig/local" "$BUN_SRC/.zig-cache"
         cd "$BUN_BUILD"
-        ninja -j"$JOBS"
+        ninja -j"$JOBS" -v 2>&1 | tee "$BUN_BUILD/build.log"
     else
         echo "ERROR: Build failed (Zig patch was already applied — different error)"
         exit 1
