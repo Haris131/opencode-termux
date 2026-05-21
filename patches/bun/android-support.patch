@@ -1958,8 +1958,8 @@ index 16a1386..725335d 100644
 -                .fromNative(@intCast(@intFromPtr(socket.getNativeHandle(is_ssl))));
 +                // On 64-bit Android, @intFromPtr produces usize (64-bit).
 +                // The native handle is a file descriptor stored as a pointer,
-+                // so it fits in i32. Use @truncate to avoid panic.
-+                .fromNative(@as(i32, @truncate(@intFromPtr(socket.getNativeHandle(is_ssl)))));
++                // so it fits in i32. Use @intCast to convert and truncate.
++                .fromNative(@as(i32, @intCast(@intFromPtr(socket.getNativeHandle(is_ssl)))));
          }
  
          pub fn markNeedsMoreForSendfile(this: ThisSocket) void {
@@ -2088,7 +2088,7 @@ index 5f14200..16ef0fe 100644
 +        const errno_val = if (Environment.isWindows) @abs(errno) else errno;
          return .{
 -            .errno = @as(Int, @intCast(if (Environment.isWindows) @abs(errno) else errno)),
-+            .errno = @as(Int, @truncate(errno_val)),
++            .errno = @as(Int, @intCast(errno_val)),
              .syscall = syscall_tag,
          };
      }
