@@ -29,6 +29,7 @@ fi
 echo ">>> Applying Bun Android patches..."
 cd "$BUN_SRC"
 git checkout -- . 2>/dev/null || true  # Reset any previous patches
+git clean -fd 2>/dev/null || true       # Remove new files from previous patch
 git apply --stat "$REPO_ROOT/patches/bun/android-support.patch"
 git apply "$REPO_ROOT/patches/bun/android-support.patch"
 echo "    Bun patches applied successfully"
@@ -50,6 +51,7 @@ fi
 echo ">>> Applying WebKit Android patches..."
 cd "$WEBKIT_SRC"
 git checkout -- . 2>/dev/null || true  # Reset any previous patches
+git clean -fd 2>/dev/null || true       # Remove new files from previous patch
 git apply --stat "$REPO_ROOT/patches/webkit/android-support.patch"
 git apply "$REPO_ROOT/patches/webkit/android-support.patch"
 echo "    WebKit patches applied successfully"
