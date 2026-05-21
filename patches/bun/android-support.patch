@@ -248,10 +248,10 @@ index 412cb06..5e701d7 100644
 +  endif()
 +endif()
 diff --git a/cmake/targets/BuildBun.cmake b/cmake/targets/BuildBun.cmake
-index c960084..7880147 100644
---- a/cmake/targets/BuildBun.cmake	2026-05-21 08:57:55.927972334 +0700
-+++ b/cmake/targets/BuildBun.cmake	2026-05-21 08:56:42.111972330 +0700
-@@ -537,6 +537,9 @@
+index c960084..46df1ac 100644
+--- a/cmake/targets/BuildBun.cmake
++++ b/cmake/targets/BuildBun.cmake
+@@ -537,6 +537,9 @@ endif()
  if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm|ARM|arm64|ARM64|aarch64|AARCH64")
    if(APPLE)
      set(ZIG_CPU "apple_m1")
@@ -261,7 +261,7 @@ index c960084..7880147 100644
    else()
      set(ZIG_CPU "native")
    endif()
-@@ -555,6 +558,11 @@
+@@ -555,6 +558,11 @@ if(NOT "${REVISION}" STREQUAL "")
    set(ZIG_FLAGS_BUN ${ZIG_FLAGS_BUN} -Dsha=${REVISION})
  endif()
  
@@ -273,7 +273,7 @@ index c960084..7880147 100644
  register_command(
    TARGET
      bun-zig
-@@ -606,6 +614,23 @@
+@@ -606,6 +614,23 @@ if(WIN32)
    list(APPEND BUN_CXX_SOURCES ${CWD}/src/bun.js/bindings/windows/rescle-binding.cpp)
  endif()
  
@@ -297,7 +297,7 @@ index c960084..7880147 100644
  register_repository(
    NAME
      picohttpparser
-@@ -699,6 +724,14 @@
+@@ -699,6 +724,14 @@ if(NOT bun STREQUAL "bun")
    add_custom_target(bun DEPENDS ${bun})
  endif()
  
@@ -312,7 +312,7 @@ index c960084..7880147 100644
  # --- C/C++ Properties ---
  
  set_target_properties(${bun} PROPERTIES
-@@ -816,10 +849,15 @@
+@@ -816,10 +849,15 @@ if(NOT WIN32)
    target_compile_options(${bun} PUBLIC
      -fconstexpr-steps=2542484
      -fconstexpr-depth=54
@@ -330,7 +330,7 @@ index c960084..7880147 100644
    if(DEBUG)
      # TODO: this shouldn't be necessary long term
      if (NOT ABI STREQUAL "musl")
-@@ -863,6 +901,7 @@
+@@ -863,6 +901,7 @@ if(NOT WIN32)
        -Wno-unused-function
        -Wno-c++23-lambda-attributes
        -Wno-nullability-completeness
@@ -338,7 +338,7 @@ index c960084..7880147 100644
        -Werror
      )
    else()
-@@ -880,6 +919,7 @@
+@@ -880,6 +919,7 @@ if(NOT WIN32)
        -Werror=sometimes-uninitialized
        -Wno-c++23-lambda-attributes
        -Wno-nullability-completeness
@@ -346,7 +346,7 @@ index c960084..7880147 100644
        -Werror
      )
      
-@@ -937,54 +977,78 @@
+@@ -937,54 +977,78 @@ if(APPLE)
  endif()
  
  if(LINUX)
@@ -467,26 +467,38 @@ index c960084..7880147 100644
  endif()
  
  # --- Symbols list ---
-@@ -1042,6 +1106,18 @@
+@@ -1033,12 +1097,24 @@ if(WIN32)
+     )
+   endif()
+ else()
+-  target_link_libraries(${bun} PRIVATE
+-    ${WEBKIT_LIB_PATH}/libWTF.a
+-    ${WEBKIT_LIB_PATH}/libJavaScriptCore.a
+-  )
+-  if(NOT APPLE OR EXISTS ${WEBKIT_LIB_PATH}/libbmalloc.a)
+-    target_link_libraries(${bun} PRIVATE ${WEBKIT_LIB_PATH}/libbmalloc.a)
++  if(ANDROID)
++    # --whole-archive must wrap WebKit libs AFTER object files to prevent
++    # --gc-sections from discarding JSC runtime symbols.
++    target_link_options(${bun} PRIVATE
++      "LINKER:--whole-archive"
++      "${WEBKIT_LIB_PATH}/libWTF.a"
++      "${WEBKIT_LIB_PATH}/libJavaScriptCore.a"
++      "${WEBKIT_LIB_PATH}/libbmalloc.a"
++      "LINKER:--no-whole-archive"
++    )
++  else()
++    target_link_libraries(${bun} PRIVATE
++      ${WEBKIT_LIB_PATH}/libWTF.a
++      ${WEBKIT_LIB_PATH}/libJavaScriptCore.a
++    )
++    if(NOT APPLE OR EXISTS ${WEBKIT_LIB_PATH}/libbmalloc.a)
++      target_link_libraries(${bun} PRIVATE ${WEBKIT_LIB_PATH}/libbmalloc.a)
++    endif()
    endif()
  endif()
  
-+# Android: --whole-archive forces all WebKit static library object files
-+# to be included, ensuring JSC runtime symbols are visible to the linker.
-+if(ANDROID)
-+  target_link_options(${bun} PRIVATE
-+    "LINKER:--whole-archive"
-+    "${WEBKIT_LIB_PATH}/libJavaScriptCore.a"
-+    "${WEBKIT_LIB_PATH}/libWTF.a"
-+    "${WEBKIT_LIB_PATH}/libbmalloc.a"
-+    "LINKER:--no-whole-archive"
-+  )
-+endif()
-+
- include_directories(${WEBKIT_INCLUDE_PATH})
- 
- if(NOT WEBKIT_LOCAL AND NOT APPLE)
-@@ -1059,7 +1135,23 @@
+@@ -1059,7 +1135,23 @@ set(BUN_DEPENDENCIES
    LolHtml
    Lshpack
    Mimalloc
@@ -511,7 +523,7 @@ index c960084..7880147 100644
    Zlib
    LibArchive # must be loaded after zlib
    Zstd
-@@ -1092,22 +1184,33 @@
+@@ -1092,22 +1184,33 @@ else()
  endif()
  
  if(LINUX)
@@ -558,7 +570,7 @@ index c960084..7880147 100644
    endif()
  endif()
  
-@@ -1170,10 +1273,13 @@
+@@ -1170,10 +1273,13 @@ if(NOT BUN_CPP_ONLY)
    # ==856230==See https://github.com/google/sanitizers/issues/856 for possible workarounds.
    # the linked issue refers to very old kernels but this still happens to us on modern ones.
    # disabling ASLR to run the binary works around it
@@ -573,7 +585,7 @@ index c960084..7880147 100644
      set(TEST_BUN_COMMAND
        ${TEST_BUN_COMMAND_ENV_WRAP} setarch ${CMAKE_HOST_SYSTEM_PROCESSOR} -R ${TEST_BUN_COMMAND_BASE}
        || ${TEST_BUN_COMMAND_ENV_WRAP} ${TEST_BUN_COMMAND_BASE})
-@@ -1218,6 +1324,7 @@
+@@ -1218,6 +1324,7 @@ if(NOT BUN_CPP_ONLY)
          ${BUILD_PATH}/features.json
      )
    endif()
@@ -581,7 +593,7 @@ index c960084..7880147 100644
  
    if(CMAKE_HOST_APPLE AND bunStrip)
      register_command(
-@@ -1244,7 +1351,9 @@
+@@ -1244,7 +1351,9 @@ if(NOT BUN_CPP_ONLY)
  
    if(CI)
      set(bunTriplet bun-${OS}-${ARCH})
@@ -592,7 +604,7 @@ index c960084..7880147 100644
        set(bunTriplet ${bunTriplet}-musl)
      endif()
      if(ENABLE_BASELINE)
-@@ -1256,7 +1365,10 @@
+@@ -1256,7 +1365,10 @@ if(NOT BUN_CPP_ONLY)
      else()
        string(REPLACE bun ${bunTriplet} bunPath ${bun})
      endif()
