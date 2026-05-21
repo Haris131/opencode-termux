@@ -72,12 +72,11 @@ cmake \
     -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BUN_TOOLCHAIN" \
     -DANDROID_NDK_HOME="$ANDROID_NDK_HOME" \
-    -DCMAKE_BUILD_TYPE=Debug \
+    -DCMAKE_BUILD_TYPE=Release \
     -DENABLE_LTO=OFF \
     -DBUN_LINK_ONLY=OFF \
     -DWEBKIT_LOCAL=ON \
     -DWEBKIT_PATH="$WEBKIT_OUTPUT" \
-    -DZIG_OPTIMIZE=Debug \
     "$BUN_SRC"
 
 echo ""
@@ -120,12 +119,9 @@ fi
 echo ">>> Building Bun (this will take 30-45 minutes)..."
 echo "    .zig-cache -> $(readlink -f "$BUN_SRC/.zig-cache" 2>/dev/null || echo 'NOT A SYMLINK')"
 cd "$BUN_BUILD"
-ninja -j"$JOBS" -v 2>&1 | tee "$BUN_BUILD/build.log" || {
+ninja -j"$JOBS" 2>&1 || {
     echo ""
     echo ">>> Build failed. Checking if Zig was downloaded during the build..."
-    # Print the last 500 lines of the build log for debugging
-    echo ">>> Last 500 lines of build log:"
-    tail -500 "$BUN_BUILD/build.log"
     # If Zig was just downloaded during the build and the patch wasn't applied,
     # apply it now and retry
     if [ -f "$ZIG_POSIX" ] && ! grep -q "comptime builtin.abi.isAndroid()" "$ZIG_POSIX" 2>/dev/null; then
@@ -140,7 +136,7 @@ ninja -j"$JOBS" -v 2>&1 | tee "$BUN_BUILD/build.log" || {
         mkdir -p "$BUN_BUILD/cache/zig/local" "$BUN_BUILD/cache/zig/global"
         ln -sfn "$BUN_BUILD/cache/zig/local" "$BUN_SRC/.zig-cache"
         cd "$BUN_BUILD"
-        ninja -j"$JOBS" -v 2>&1 | tee "$BUN_BUILD/build.log"
+        ninja -j"$JOBS"
     else
         echo "ERROR: Build failed (Zig patch was already applied — different error)"
         exit 1
@@ -148,10 +144,10 @@ ninja -j"$JOBS" -v 2>&1 | tee "$BUN_BUILD/build.log" || {
 }
 
 # Verify output
-# Prefer bun-profile (unstripped with debug symbols) over stripped bun
-BUN_BINARY="$BUN_BUILD/bun-profile"
+BUN_BINARY="$BUN_BUILD/bun"
 if [ ! -f "$BUN_BINARY" ]; then
-    BUN_BINARY="$BUN_BUILD/bun"
+    # Try bun-profile (unstripped)
+    BUN_BINARY="$BUN_BUILD/bun-profile"
 fi
 
 if [ ! -f "$BUN_BINARY" ]; then
@@ -164,8 +160,3 @@ echo "=== Bun build complete ==="
 echo "Binary: $BUN_BINARY"
 echo "Size: $(du -h "$BUN_BINARY" | cut -f1)"
 file "$BUN_BINARY"
-echo ""
-echo "To debug panics, run on device:"
-echo "  ZIG_BACKTRACE=1 ./$(basename "$BUN_BINARY") 2>&1 | head -100"
-echo "Or with lldb:"
-echo "  lldb -o 'run' -o 'bt' -o 'thread backtrace all' -- ./$(basename "$BUN_BINARY")"

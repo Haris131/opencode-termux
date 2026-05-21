@@ -16,9 +16,7 @@ source "$SCRIPT_DIR/env.sh"
 TOOLCHAIN="$REPO_ROOT/cmake/webkit-android-toolchain.cmake"
 
 # Compiler flags matching oven-sh/WebKit's Dockerfile
-# STATICALLY_LINKED_WITH_* defines are CRITICAL: they tell WebKit's JS_EXPORT/WTF_EXPORT
-# macros to NOT apply hidden visibility, so symbols are exported from static libraries.
-DEFAULT_CFLAGS="-fno-omit-frame-pointer -ffunction-sections -fdata-sections -faddrsig -DU_STATIC_IMPLEMENTATION=1 -DSTATICALLY_LINKED_WITH_JavaScriptCore=1 -DSTATICALLY_LINKED_WITH_WTF=1 -DSTATICALLY_LINKED_WITH_BMALLOC=1 -DBUILDING_JSCONLY__"
+DEFAULT_CFLAGS="-fno-omit-frame-pointer -ffunction-sections -fdata-sections -faddrsig -DU_STATIC_IMPLEMENTATION=1"
 RELEASE_FLAGS="-O3 -DNDEBUG=1"
 
 echo "=== Building WebKit/JSC for Android aarch64 ==="
@@ -56,15 +54,12 @@ cmake \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_TMP" \
     -DPORT=JSCOnly \
     -DENABLE_STATIC_JSC=ON \
-    -DENABLE_SHARED_JSC=OFF \
     -DCMAKE_BUILD_TYPE=Release \
     -DUSE_THIN_ARCHIVES=OFF \
     -DUSE_BUN_JSC_ADDITIONS=ON \
     -DUSE_BUN_EVENT_LOOP=ON \
     -DENABLE_BUN_SKIP_FAILING_ASSERTIONS=ON \
     -DENABLE_FTL_JIT=ON \
-    -DENABLE_DFG_JIT=ON \
-    -DENABLE_JIT=ON \
     -DENABLE_REMOTE_INSPECTOR=ON \
     -DALLOW_LINE_AND_COLUMN_NUMBER_IN_BUILTINS=ON \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
@@ -72,8 +67,6 @@ cmake \
     -DCMAKE_CXX_FLAGS="$DEFAULT_CFLAGS -fno-exceptions -fno-c++-static-destructors" \
     -DCMAKE_C_FLAGS_RELEASE="$RELEASE_FLAGS" \
     -DCMAKE_CXX_FLAGS_RELEASE="$RELEASE_FLAGS" \
-    -DCMAKE_CXX_VISIBILITY_PRESET=default \
-    -DCMAKE_VISIBILITY_INLINES_HIDDEN=OFF \
     -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld" \
     -DICU_ROOT="$DEPS_PREFIX" \
     -DICU_INCLUDE_DIRS="$DEPS_PREFIX/include" \
@@ -82,10 +75,7 @@ cmake \
 echo ""
 echo ">>> Configure complete. Building..."
 
-# Build JavaScriptCore library target (includes all runtime symbols Bun needs)
-cmake --build "$WEBKIT_BUILD" --config Release --target JavaScriptCore -- -j"$JOBS"
-
-# Build jsc target (shell executable, ensures all dependencies are built)
+# Build JSC target
 cmake --build "$WEBKIT_BUILD" --config Release --target jsc -- -j"$JOBS"
 
 # Build private headers

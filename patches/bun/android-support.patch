@@ -73,10 +73,10 @@ index 04afe96..07a91d1 100644
  
      const zlib_internal_path = switch (os) {
 diff --git a/cmake/CSources.txt b/cmake/CSources.txt
-index 67bf951..4399a8e 100644
+index 67bf951..08212f1 100644
 --- a/cmake/CSources.txt
 +++ b/cmake/CSources.txt
-@@ -8,4 +8,6 @@ packages/bun-usockets/src/quic.c
+@@ -8,4 +8,5 @@ packages/bun-usockets/src/quic.c
  packages/bun-usockets/src/socket.c
  packages/bun-usockets/src/udp.c
  src/bun.js/bindings/uv-posix-polyfills.c
@@ -84,7 +84,6 @@ index 67bf951..4399a8e 100644
 \ No newline at end of file
 +src/bun.js/bindings/uv-posix-stubs.c
 +src/android_tls_align.c
-+src/android_disable_tags.c
 \ No newline at end of file
 diff --git a/cmake/CompilerFlags.cmake b/cmake/CompilerFlags.cmake
 index c321c75..142d228 100644
@@ -248,7 +247,7 @@ index 412cb06..5e701d7 100644
 +  endif()
 +endif()
 diff --git a/cmake/targets/BuildBun.cmake b/cmake/targets/BuildBun.cmake
-index c960084..46df1ac 100644
+index c960084..aa591ff 100644
 --- a/cmake/targets/BuildBun.cmake
 +++ b/cmake/targets/BuildBun.cmake
 @@ -537,6 +537,9 @@ endif()
@@ -330,15 +329,7 @@ index c960084..46df1ac 100644
    if(DEBUG)
      # TODO: this shouldn't be necessary long term
      if (NOT ABI STREQUAL "musl")
-@@ -863,6 +901,7 @@ if(NOT WIN32)
-       -Wno-unused-function
-       -Wno-c++23-lambda-attributes
-       -Wno-nullability-completeness
-+      -Wno-undefined-var-template
-       -Werror
-     )
-   else()
-@@ -880,6 +919,7 @@ if(NOT WIN32)
+@@ -880,6 +918,7 @@ if(NOT WIN32)
        -Werror=sometimes-uninitialized
        -Wno-c++23-lambda-attributes
        -Wno-nullability-completeness
@@ -346,7 +337,7 @@ index c960084..46df1ac 100644
        -Werror
      )
      
-@@ -937,54 +977,78 @@ if(APPLE)
+@@ -937,54 +976,78 @@ if(APPLE)
  endif()
  
  if(LINUX)
@@ -467,38 +458,7 @@ index c960084..46df1ac 100644
  endif()
  
  # --- Symbols list ---
-@@ -1033,12 +1097,24 @@ if(WIN32)
-     )
-   endif()
- else()
--  target_link_libraries(${bun} PRIVATE
--    ${WEBKIT_LIB_PATH}/libWTF.a
--    ${WEBKIT_LIB_PATH}/libJavaScriptCore.a
--  )
--  if(NOT APPLE OR EXISTS ${WEBKIT_LIB_PATH}/libbmalloc.a)
--    target_link_libraries(${bun} PRIVATE ${WEBKIT_LIB_PATH}/libbmalloc.a)
-+  if(ANDROID)
-+    # Use target_link_libraries with -Wl,--whole-archive to ensure correct
-+    # link order: bun objects -> whole-archive WebKit libs -> no-whole-archive
-+    target_link_libraries(${bun} PRIVATE
-+      -Wl,--whole-archive
-+      "${WEBKIT_LIB_PATH}/libWTF.a"
-+      "${WEBKIT_LIB_PATH}/libJavaScriptCore.a"
-+      "${WEBKIT_LIB_PATH}/libbmalloc.a"
-+      -Wl,--no-whole-archive
-+    )
-+  else()
-+    target_link_libraries(${bun} PRIVATE
-+      ${WEBKIT_LIB_PATH}/libWTF.a
-+      ${WEBKIT_LIB_PATH}/libJavaScriptCore.a
-+    )
-+    if(NOT APPLE OR EXISTS ${WEBKIT_LIB_PATH}/libbmalloc.a)
-+      target_link_libraries(${bun} PRIVATE ${WEBKIT_LIB_PATH}/libbmalloc.a)
-+    endif()
-   endif()
- endif()
- 
-@@ -1059,7 +1135,23 @@ set(BUN_DEPENDENCIES
+@@ -1059,7 +1122,23 @@ set(BUN_DEPENDENCIES
    LolHtml
    Lshpack
    Mimalloc
@@ -523,7 +483,7 @@ index c960084..46df1ac 100644
    Zlib
    LibArchive # must be loaded after zlib
    Zstd
-@@ -1092,22 +1184,33 @@ else()
+@@ -1092,22 +1171,33 @@ else()
  endif()
  
  if(LINUX)
@@ -570,7 +530,7 @@ index c960084..46df1ac 100644
    endif()
  endif()
  
-@@ -1170,10 +1273,13 @@ if(NOT BUN_CPP_ONLY)
+@@ -1170,10 +1260,13 @@ if(NOT BUN_CPP_ONLY)
    # ==856230==See https://github.com/google/sanitizers/issues/856 for possible workarounds.
    # the linked issue refers to very old kernels but this still happens to us on modern ones.
    # disabling ASLR to run the binary works around it
@@ -585,7 +545,7 @@ index c960084..46df1ac 100644
      set(TEST_BUN_COMMAND
        ${TEST_BUN_COMMAND_ENV_WRAP} setarch ${CMAKE_HOST_SYSTEM_PROCESSOR} -R ${TEST_BUN_COMMAND_BASE}
        || ${TEST_BUN_COMMAND_ENV_WRAP} ${TEST_BUN_COMMAND_BASE})
-@@ -1218,6 +1324,7 @@ if(NOT BUN_CPP_ONLY)
+@@ -1218,6 +1311,7 @@ if(NOT BUN_CPP_ONLY)
          ${BUILD_PATH}/features.json
      )
    endif()
@@ -593,7 +553,7 @@ index c960084..46df1ac 100644
  
    if(CMAKE_HOST_APPLE AND bunStrip)
      register_command(
-@@ -1244,7 +1351,9 @@ if(NOT BUN_CPP_ONLY)
+@@ -1244,7 +1338,9 @@ if(NOT BUN_CPP_ONLY)
  
    if(CI)
      set(bunTriplet bun-${OS}-${ARCH})
@@ -604,7 +564,7 @@ index c960084..46df1ac 100644
        set(bunTriplet ${bunTriplet}-musl)
      endif()
      if(ENABLE_BASELINE)
-@@ -1256,7 +1365,10 @@ if(NOT BUN_CPP_ONLY)
+@@ -1256,7 +1352,10 @@ if(NOT BUN_CPP_ONLY)
      else()
        string(REPLACE bun ${bunTriplet} bunPath ${bun})
      endif()
@@ -616,7 +576,6 @@ index c960084..46df1ac 100644
      if(WIN32)
        list(APPEND bunFiles ${bun}.pdb)
      elseif(APPLE)
-
 diff --git a/cmake/targets/BuildLolHtml.cmake b/cmake/targets/BuildLolHtml.cmake
 index c9d9d24..2df0e9b 100644
 --- a/cmake/targets/BuildLolHtml.cmake
@@ -857,7 +816,7 @@ index f4d4bc3..06bc9ae 100644
                  errno = ENAMETOOLONG;
                  return LIBUS_SOCKET_ERROR;
 diff --git a/src/Global.zig b/src/Global.zig
-index 8f97d4f..b24e559 100644
+index 8f97d4f..52a9cba 100644
 --- a/src/Global.zig
 +++ b/src/Global.zig
 @@ -149,7 +149,9 @@ pub fn raiseIgnoringPanicHandler(sig: bun.SignalCode) noreturn {
@@ -865,9 +824,9 @@ index 8f97d4f..b24e559 100644
              .flags = std.posix.SA.RESETHAND,
          };
 -        _ = std.c.sigaction(@intFromEnum(sig), &sa, null);
-+        // On Android, bypass std.c.sigaction (wrong struct size for Bionic)
-+        // and std.posix.sigaction (u6 parameter limits signal to 0-63).
-+        _ = std.os.linux.syscall4(.rt_sigaction, @intFromEnum(sig), @intFromPtr(&sa), 0, @sizeOf(std.posix.sigset_t));
++        // Use std.posix.sigaction which handles the Android/Bionic ABI mismatch
++        // (Bionic's struct sigaction is 32 bytes vs Zig's 152 bytes)
++        std.posix.sigaction(@intCast(@intFromEnum(sig)), &sa, null);
      }
  
      // kill self
@@ -928,75 +887,6 @@ index 267d1f8..dcc64b7 100644
          };
  
          _ = string_builder.append(std.mem.asBytes(&offsets));
-diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
-new file mode 100644
-index 0000000..c82e2fc
---- /dev/null
-+++ b/src/android_disable_tags.c
-@@ -0,0 +1,63 @@
-+/*
-+ * android_disable_tags.c
-+ *
-+ * Disable ARM64 pointer tagging (TBI/MTE) on Android to prevent
-+ * crashes in Bun's Zig code which doesn't handle tagged pointers.
-+ *
-+ * This runs as an early constructor, BEFORE any Bun allocations.
-+ * We disable tagging at the source (kernel + heap allocator) rather
-+ * than intercepting allocation functions, which is fragile and causes
-+ * segfaults when overriding malloc/calloc in the dynamic linker context.
-+ */
-+
-+#if defined(__ANDROID__) && defined(__aarch64__)
-+
-+#include <dlfcn.h>
-+#include <stdlib.h>
-+#include <sys/prctl.h>
-+
-+#ifndef PR_SET_TAGGED_ADDR_CTRL
-+#define PR_SET_TAGGED_ADDR_CTRL 55
-+#endif
-+#ifndef PR_GET_TAGGED_ADDR_CTRL
-+#define PR_GET_TAGGED_ADDR_CTRL 56
-+#endif
-+#ifndef PR_TAGGED_ADDR_ENABLE
-+#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
-+#endif
-+#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
-+#define M_BIONIC_SET_HEAP_TAGGING_LEVEL (-204)
-+#endif
-+#ifndef M_HEAP_TAGGING_LEVEL_NONE
-+#define M_HEAP_TAGGING_LEVEL_NONE 0
-+#endif
-+
-+static void disable_tagged_addresses(void) {
-+    /* Disable kernel tagged address ABI for this thread */
-+    prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+}
-+
-+static void disable_heap_tagging(void) {
-+    /* Disable Bionic scudo heap pointer tagging */
-+    void *libc = dlopen("libc.so", RTLD_NOW);
-+    if (!libc) return;
-+
-+    int (*mallopt_fn)(int, int) = dlsym(libc, "mallopt");
-+    if (mallopt_fn) {
-+        mallopt_fn(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
-+    }
-+
-+    int (*android_mallopt_fn)(int, void *, size_t) = dlsym(libc, "android_mallopt");
-+    if (android_mallopt_fn) {
-+        int level = M_HEAP_TAGGING_LEVEL_NONE;
-+        android_mallopt_fn(8, &level, sizeof(level));
-+    }
-+    dlclose(libc);
-+}
-+
-+void __attribute__((constructor(101))) android_disable_tagged_pointers(void) {
-+    disable_tagged_addresses();
-+    disable_heap_tagging();
-+}
-+
-+#endif /* __ANDROID__ && __aarch64__ */
 diff --git a/src/android_tls_align.c b/src/android_tls_align.c
 new file mode 100644
 index 0000000..f801b82
@@ -1067,26 +957,6 @@ index 0000000..6ea310b
 +.size _android_tls_align_force,64
 +_android_tls_align_force:
 +.zero 64
-diff --git a/src/bun.js/api/bun/socket.zig b/src/bun.js/api/bun/socket.zig
-index 8c24b2b..cf4ba28 100644
---- a/src/bun.js/api/bun/socket.zig
-+++ b/src/bun.js/api/bun/socket.zig
-@@ -781,7 +781,14 @@ pub const Listener = struct {
-                     );
-                     // should return the assigned port
-                     if (socket) |s| {
--                        connection.host.port = @as(u16, @intCast(s.getLocalPort(ssl_enabled)));
-+                        // getLocalPort returns i32; on Android/Bionic it may return
-+                        // -1 or other negative values on error. Guard against panic.
-+                        const port_raw = s.getLocalPort(ssl_enabled);
-+                        if (port_raw >= 0 and port_raw <= 65535) {
-+                            connection.host.port = @as(u16, @intCast(port_raw));
-+                        } else {
-+                            connection.host.port = 0;
-+                        }
-                     }
-                     break :brk socket;
-                 },
 diff --git a/src/bun.js/bindings/ZigGlobalObject.cpp b/src/bun.js/bindings/ZigGlobalObject.cpp
 index 5e534e5..e60230d 100644
 --- a/src/bun.js/bindings/ZigGlobalObject.cpp
@@ -1293,35 +1163,10 @@ index daa0f78..39c021b 100644
 +#endif
  
  #endif
-diff --git a/src/bun.js/event_loop.zig b/src/bun.js/event_loop.zig
-index 4ee693d..e92a924 100644
---- a/src/bun.js/event_loop.zig
-+++ b/src/bun.js/event_loop.zig
-@@ -2532,7 +2532,10 @@ pub const PosixSignalHandle = struct {
-     /// Note: Must be minimal logic here. Only do atomics & signal‐safe calls.
-     export fn Bun__onPosixSignal(number: i32) void {
-         const vm = VirtualMachine.getMainThreadVM().?;
--        _ = vm.eventLoop().signal_handler.?.enqueue(@intCast(number));
-+        // On Android, signal numbers could theoretically exceed u8 range
-+        // (e.g., corrupted signal delivery or real-time signals > 255).
-+        // Use @truncate to avoid panic; the dequeue path handles unknown signals.
-+        _ = vm.eventLoop().signal_handler.?.enqueue(@as(u8, @truncate(@as(u32, @bitCast(number)))));
-     }
- 
-     /// Called by the main thread (single consumer).
 diff --git a/src/bun.js/node/node_fs.zig b/src/bun.js/node/node_fs.zig
-index 1fa1bd7..53dac4f 100644
+index 1fa1bd7..49696df 100644
 --- a/src/bun.js/node/node_fs.zig
 +++ b/src/bun.js/node/node_fs.zig
-@@ -3417,7 +3417,7 @@ pub const NodeFS = struct {
-     pub fn uv_close(_: *NodeFS, args: Arguments.Close, rc: i64) Maybe(Return.Close) {
-         if (rc < 0) {
-             return Maybe(Return.Close){ .err = .{
--                .errno = @intCast(-rc),
-+                .errno = @truncate(-rc),
-                 .syscall = .close,
-                 .fd = args.fd,
-                 .from_libuv = true,
 @@ -3864,6 +3864,11 @@ pub const NodeFS = struct {
              return Maybe(Return.Lchmod).todo();
          }
@@ -1334,91 +1179,6 @@ index 1fa1bd7..53dac4f 100644
          const path = args.path.sliceZ(&this.sync_error_buf);
          return Maybe(Return.Lchmod).errnoSysP(c.lchmod(path, @truncate(args.mode)), .lchmod, path) orelse
              Maybe(Return.Lchmod).success;
-@@ -4190,19 +4195,19 @@ pub const NodeFS = struct {
-         _ = this;
-         if (rc < 0) {
-             return Maybe(Return.Open){ .err = .{
--                .errno = @intCast(-rc),
-+                .errno = @truncate(-rc),
-                 .syscall = .open,
-                 .path = args.path.slice(),
-                 .from_libuv = true,
-             } };
-         }
--        return Maybe(Return.Open).initResult(.fromUV(@intCast(rc)));
-+        return Maybe(Return.Open).initResult(.fromUV(@truncate(rc)));
-     }
- 
-     pub fn uv_statfs(_: *NodeFS, args: Arguments.StatFS, req: *uv.fs_t, rc: i64) Maybe(Return.StatFS) {
-         if (rc < 0) {
-             return Maybe(Return.StatFS){ .err = .{
--                .errno = @intCast(-rc),
-+                .errno = @truncate(-rc),
-                 .syscall = .open,
-                 .path = args.path.slice(),
-                 .from_libuv = true,
-@@ -4263,26 +4268,26 @@ pub const NodeFS = struct {
-         _ = this;
-         if (rc < 0) {
-             return Maybe(Return.Read){ .err = .{
--                .errno = @intCast(-rc),
-+                .errno = @truncate(-rc),
-                 .syscall = .read,
-                 .fd = args.fd,
-                 .from_libuv = true,
-             } };
-         }
--        return Maybe(Return.Read).initResult(.{ .bytes_read = @intCast(rc) });
-+        return Maybe(Return.Read).initResult(.{ .bytes_read = @truncate(rc) });
-     }
- 
-     pub fn uv_readv(this: *NodeFS, args: Arguments.Readv, rc: i64) Maybe(Return.Readv) {
-         _ = this;
-         if (rc < 0) {
-             return Maybe(Return.Readv){ .err = .{
--                .errno = @intCast(-rc),
-+                .errno = @truncate(-rc),
-                 .syscall = .readv,
-                 .fd = args.fd,
-                 .from_libuv = true,
-             } };
-         }
--        return Maybe(Return.Readv).initResult(.{ .bytes_read = @intCast(rc) });
-+        return Maybe(Return.Readv).initResult(.{ .bytes_read = @truncate(rc) });
-     }
- 
-     pub fn readv(this: *NodeFS, args: Arguments.Readv, _: Flavor) Maybe(Return.Readv) {
-@@ -4307,26 +4312,26 @@ pub const NodeFS = struct {
-         _ = this;
-         if (rc < 0) {
-             return Maybe(Return.Write){ .err = .{
--                .errno = @intCast(-rc),
-+                .errno = @truncate(-rc),
-                 .syscall = .write,
-                 .fd = args.fd,
-                 .from_libuv = true,
-             } };
-         }
--        return Maybe(Return.Write).initResult(.{ .bytes_written = @intCast(rc) });
-+        return Maybe(Return.Write).initResult(.{ .bytes_written = @truncate(rc) });
-     }
- 
-     pub fn uv_writev(this: *NodeFS, args: Arguments.Writev, rc: i64) Maybe(Return.Writev) {
-         _ = this;
-         if (rc < 0) {
-             return Maybe(Return.Writev){ .err = .{
--                .errno = @intCast(-rc),
-+                .errno = @truncate(-rc),
-                 .syscall = .writev,
-                 .fd = args.fd,
-                 .from_libuv = true,
-             } };
-         }
--        return Maybe(Return.Writev).initResult(.{ .bytes_written = @intCast(rc) });
-+        return Maybe(Return.Writev).initResult(.{ .bytes_written = @truncate(rc) });
-     }
- 
-     fn writeInner(_: *NodeFS, args: Arguments.Write) Maybe(Return.Write) {
 diff --git a/src/bun.js/node/node_os.zig b/src/bun.js/node/node_os.zig
 index f5790e3..4fadcc0 100644
 --- a/src/bun.js/node/node_os.zig
@@ -1987,22 +1747,6 @@ index 6a5dca0..ded884a 100644
          tcc_list_symbols(s, ctx, symbolCb);
      }
  };
-diff --git a/src/deps/uws.zig b/src/deps/uws.zig
-index 16a1386..725335d 100644
---- a/src/deps/uws.zig
-+++ b/src/deps/uws.zig
-@@ -1498,7 +1498,10 @@ pub fn NewSocketHandler(comptime is_ssl: bool) type {
-             return if (comptime Environment.isWindows)
-                 .fromNative(@ptrCast(socket.getNativeHandle(is_ssl).?))
-             else
--                .fromNative(@intCast(@intFromPtr(socket.getNativeHandle(is_ssl))));
-+                // On 64-bit Android, @intFromPtr produces usize (64-bit).
-+                // The native handle is a file descriptor stored as a pointer,
-+                // so it fits in i32. Use @truncate to avoid panic.
-+                .fromNative(@as(i32, @bitCast(@as(u32, @truncate(@intFromPtr(socket.getNativeHandle(is_ssl)))))));
-         }
- 
-         pub fn markNeedsMoreForSendfile(this: ThisSocket) void {
 diff --git a/src/env.zig b/src/env.zig
 index 41364f1..6029059 100644
 --- a/src/env.zig
@@ -2063,7 +1807,7 @@ index b8e8c7b..1de6f2e 100644
      const JSC = bun.JSC;
      pub fn jsFunctionLibcIsMatch(globalObject: *JSC.JSGlobalObject, callframe: *JSC.CallFrame) bun.JSError!JSC.JSValue {
 diff --git a/src/linux.zig b/src/linux.zig
-index 4187c86..093c65e 100644
+index 4187c86..51669c0 100644
 --- a/src/linux.zig
 +++ b/src/linux.zig
 @@ -73,6 +73,11 @@ pub fn ioctl_ficlone(dest_fd: bun.FileDescriptor, srcfd: bun.FileDescriptor) usi
@@ -2073,66 +1817,16 @@ index 4187c86..093c65e 100644
 +    if (comptime bun.Environment.isAndroid) {
 +        // Android seccomp may block epoll_pwait2 in app processes (Termux).
 +        // Return ENOSYS so the caller falls back to epoll_pwait.
-+        return -@as(isize, @intCast(@as(i64, @intFromEnum(std.os.linux.E.NOSYS))));
++        return -@as(isize, @intCast(@intFromEnum(std.os.linux.E.NOSYS)));
 +    }
      return @bitCast(
          std.os.linux.syscall6(
              .epoll_pwait2,
-diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
-index dbc49a3..a69e238 100644
---- a/src/resolver/resolver.zig
-+++ b/src/resolver/resolver.zig
-@@ -2853,12 +2853,18 @@ pub const Resolver = struct {
-                     // where people try to import from a path containing a file as a parent
-                     // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
-                     // list which contains such paths and treating them as missing means we just
--                    // ignore them during path resolution.
-+                    // ignore them during path resolution. On Android/Termux (non-root), the
-+                    // directories /data/ and /data/data/ cannot be listed by unprivileged
-+                    // processes (EACCES). The resolver walks up from the CWD looking for
-+                    // node_modules, so it will hit these restricted directories. Treat
-+                    // AccessDenied like FileNotFound to prevent spurious error messages.
-                     error.ENOENT,
-                     error.ENOTDIR,
-                     error.IsDir,
-                     error.NotDir,
-                     error.FileNotFound,
-+                    error.EACCES,
-+                    error.AccessDenied,
-                     => return null,
- 
-                     else => {
-@@ -3811,7 +3817,11 @@ pub const Resolver = struct {
-         };
- 
-         if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
--            if (dir_entry.err.original_err != error.ENOENT) {
-+            // On Android/Termux, /data and /data/data return EACCES for
-+            // unprivileged processes -- treat like ENOENT (silently ignore).
-+            if (dir_entry.err.original_err != error.ENOENT and
-+                dir_entry.err.original_err != error.EACCES and
-+                dir_entry.err.original_err != error.AccessDenied) {
-                 r.log.addErrorFmt(
-                     null,
-                     logger.Loc.Empty,
 diff --git a/src/sys.zig b/src/sys.zig
-index 5f14200..16ef0fe 100644
+index 5f14200..5d94cc7 100644
 --- a/src/sys.zig
 +++ b/src/sys.zig
-@@ -358,8 +358,11 @@ pub const Error = struct {
-     }
- 
-     pub fn fromCodeInt(errno: anytype, syscall_tag: sys.Tag) Error {
-+        // On Android/Bionic, errno values are standard POSIX (< 256), but
-+        // guard against unexpected large values from libuv or custom sources.
-+        const errno_val = if (Environment.isWindows) @abs(errno) else @as(u32, @bitCast(errno));
-         return .{
--            .errno = @as(Int, @intCast(if (Environment.isWindows) @abs(errno) else errno)),
-+            .errno = @as(Int, @truncate(errno_val)),
-             .syscall = syscall_tag,
-         };
-     }
-@@ -2095,7 +2098,7 @@ pub fn pread(fd: bun.FileDescriptor, buf: []u8, offset: i64) Maybe(usize) {
+@@ -2095,7 +2095,7 @@ pub fn pread(fd: bun.FileDescriptor, buf: []u8, offset: i64) Maybe(usize) {
      }
  }
  
