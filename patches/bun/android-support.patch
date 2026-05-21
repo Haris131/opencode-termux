@@ -478,14 +478,14 @@ index c960084..46df1ac 100644
 -  if(NOT APPLE OR EXISTS ${WEBKIT_LIB_PATH}/libbmalloc.a)
 -    target_link_libraries(${bun} PRIVATE ${WEBKIT_LIB_PATH}/libbmalloc.a)
 +  if(ANDROID)
-+    # --whole-archive must wrap WebKit libs AFTER object files to prevent
-+    # --gc-sections from discarding JSC runtime symbols.
-+    target_link_options(${bun} PRIVATE
-+      "LINKER:--whole-archive"
++    # Use target_link_libraries with -Wl,--whole-archive to ensure correct
++    # link order: bun objects -> whole-archive WebKit libs -> no-whole-archive
++    target_link_libraries(${bun} PRIVATE
++      -Wl,--whole-archive
 +      "${WEBKIT_LIB_PATH}/libWTF.a"
 +      "${WEBKIT_LIB_PATH}/libJavaScriptCore.a"
 +      "${WEBKIT_LIB_PATH}/libbmalloc.a"
-+      "LINKER:--no-whole-archive"
++      -Wl,--no-whole-archive
 +    )
 +  else()
 +    target_link_libraries(${bun} PRIVATE
