@@ -1945,7 +1945,7 @@ index 4187c86..093c65e 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
-index dbc49a3..1cf28b5 100644
+index dbc49a3..b62806b 100644
 --- a/src/resolver/resolver.zig
 +++ b/src/resolver/resolver.zig
 @@ -2760,6 +2760,7 @@ pub const Resolver = struct {
@@ -1971,7 +1971,7 @@ index dbc49a3..1cf28b5 100644
              }
          }
  
-@@ -2846,41 +2848,40 @@ pub const Resolver = struct {
+@@ -2846,42 +2848,41 @@ pub const Resolver = struct {
  
                  bun.fs.debug("open({s}) = {any}", .{ sentinel, open_req });
  
@@ -2021,6 +2021,7 @@ index dbc49a3..1cf28b5 100644
 +                    if (code == error.ENOENT or code == error.ENOTDIR or code == error.IsDir or code == error.NotDir or code == error.FileNotFound) {
                          return null;
 -                    },
+-                };
 +                    }
 +                    const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
 +                    r.dir_cache.markNotFound(queue_top.result);
@@ -2040,9 +2041,10 @@ index dbc49a3..1cf28b5 100644
 +                        ) catch {};
 +                    }
 +                    return null;
-                 };
++                }
              };
  
+             if (!queue_top.fd.isValid()) {
 @@ -3811,7 +3812,11 @@ pub const Resolver = struct {
          };
  
