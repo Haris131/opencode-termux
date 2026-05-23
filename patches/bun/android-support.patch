@@ -1945,7 +1945,7 @@ index 4187c86..093c65e 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
-index dbc49a3..9d46610 100644
+index dbc49a3..9fa31a9 100644
 --- a/src/resolver/resolver.zig
 +++ b/src/resolver/resolver.zig
 @@ -2760,6 +2760,7 @@ pub const Resolver = struct {
@@ -1971,31 +1971,7 @@ index dbc49a3..9d46610 100644
              }
          }
  
-@@ -2826,6 +2828,23 @@ pub const Resolver = struct {
-                 defer path.ptr[queue_top.unsafe_path.len] = prev_char;
-                 const sentinel = path.ptr[0..queue_top.unsafe_path.len :0];
- 
-+                // On Android/Termux (non-root), ancestor directories (/, /data, /data/data)
-+                // cannot be read (EACCES). Check accessibility first so we can skip them
-+                // with `continue` at the while-loop level, avoiding a `continue` inside a
-+                // `catch |err|` block which triggers a Zig codegen null-deref bug.
-+                if (comptime Environment.isAndroid) {
-+                    const rc = std.posix.system.access(sentinel, std.posix.R_OK);
-+                    if (rc != 0) {
-+                        const errno_v = std.posix.errno(rc);
-+                        if (errno_v == .ACCES or errno_v == .PERM) {
-+                            const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
-+                            r.dir_cache.markNotFound(queue_top.result);
-+                            rfs.entries.markNotFound(cached_dir_entry_result);
-+                            continue;
-+                        }
-+                    }
-+                }
-+
-                 const open_req = if (comptime Environment.isPosix)
-                     std.fs.openDirAbsoluteZ(
-                         sentinel,
-@@ -2846,42 +2865,46 @@ pub const Resolver = struct {
+@@ -2846,42 +2848,63 @@ pub const Resolver = struct {
  
                  bun.fs.debug("open({s}) = {any}", .{ sentinel, open_req });
  
@@ -2031,49 +2007,65 @@ index dbc49a3..9d46610 100644
 -                                    @errorName(err),
 -                                },
 -                            ) catch {};
--                        }
++                const maybe_open_dir: ?std.fs.Dir = blk: {
++                    const open_result = open_req catch |err| {
++                        switch (@as(anyerror, err)) {
++                            // Ignore "ENOTDIR" here so that calling "ReadDirectory" on a file behaves
++                            // as if there is nothing there at all instead of causing an error due to
++                            // the directory actually being a file. This is a workaround for situations
++                            // where people try to import from a path containing a file as a parent
++                            // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
++                            // list which contains such paths and treating them as missing means we just
++                            // ignore them during path resolution.
++                            // On Android/Termux (non-root), the directories /data/ and /data/data/
++                            // cannot be listed by unprivileged processes (EACCES). The resolver
++                            // walks up from the CWD looking for node_modules, so it will hit these
++                            // restricted directories. Skip them instead of returning null so the
++                            // resolver can continue processing deeper accessible directories.
++                            error.ENOENT,
++                            error.ENOTDIR,
++                            error.IsDir,
++                            error.NotDir,
++                            error.FileNotFound,
++                            => return null,
++
++                            error.EACCES,
++                            error.AccessDenied,
++                            => {
++                                const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
++                                r.dir_cache.markNotFound(queue_top.result);
++                                rfs.entries.markNotFound(cached_dir_entry_result);
++                                break :blk null;
++                            },
++
++                            else => {
++                                const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
++                                r.dir_cache.markNotFound(queue_top.result);
++                                rfs.entries.markNotFound(cached_dir_entry_result);
++                                if (comptime enable_logging) {
++                                    const pretty = queue_top.unsafe_path;
++
++                                    r.log.addErrorFmt(
++                                        null,
++                                        logger.Loc{},
++                                        r.allocator,
++                                        "Cannot read directory \"{s}\": {s}",
++                                        .{
++                                            pretty,
++                                            @errorName(err),
++                                        },
++                                    ) catch {};
++                                }
++                                return null;
++                            },
+                         }
 -                        return null;
 -                    },
-+                const open_result = open_req catch |err| {
-+                    switch (@as(anyerror, err)) {
-+                        // Ignore "ENOTDIR" here so that calling "ReadDirectory" on a file behaves
-+                        // as if there is nothing there at all instead of causing an error due to
-+                        // the directory actually being a file. This is a workaround for situations
-+                        // where people try to import from a path containing a file as a parent
-+                        // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
-+                        // list which contains such paths and treating them as missing means we just
-+                        // ignore them during path resolution.
-+                        // On Android, EACCES is handled by the access() check above.
-+                        error.ENOENT,
-+                        error.ENOTDIR,
-+                        error.IsDir,
-+                        error.NotDir,
-+                        error.FileNotFound,
-+                        => return null,
-+
-+                        else => {
-+                            const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
-+                            r.dir_cache.markNotFound(queue_top.result);
-+                            rfs.entries.markNotFound(cached_dir_entry_result);
-+                            if (comptime enable_logging) {
-+                                const pretty = queue_top.unsafe_path;
-+
-+                                r.log.addErrorFmt(
-+                                    null,
-+                                    logger.Loc{},
-+                                    r.allocator,
-+                                    "Cannot read directory \"{s}\": {s}",
-+                                    .{
-+                                        pretty,
-+                                        @errorName(err),
-+                                    },
-+                                ) catch {};
-+                            }
-+                            return null;
-+                        },
-+                    }
++                    };
++                    break :blk open_result;
                  };
-+                break :open_dir open_result;
++                const open_dir2 = maybe_open_dir orelse continue;
++                break :open_dir open_dir2;
              };
  
              if (!queue_top.fd.isValid()) {
