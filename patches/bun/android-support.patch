@@ -2219,8 +2219,8 @@ index 28ae78a..377744e 100644
 -                else => "/tmp",
 +                else => brk: {
 +                    if (comptime Environment.isLinux or Environment.isAndroid) {
-+                        if (bun.getenvZ("TMPDIR")) |tmpdir_path| break :brk tmpdir_path;
-+                        if (bun.getenvZ("TMP")) |tmp| break :brk tmp;
++                        if (bun.getenvZ("TMPDIR")) |td| break :brk td;
++                        if (bun.getenvZ("TMP")) |tmp_val| break :brk tmp_val;
 +                    }
 +                    break :brk "/tmp";
 +                },
