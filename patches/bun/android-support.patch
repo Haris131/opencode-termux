@@ -1945,7 +1945,7 @@ index 4187c86..093c65e 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
-index dbc49a3..c9a6563 100644
+index dbc49a3..d45e461 100644
 --- a/src/resolver/resolver.zig
 +++ b/src/resolver/resolver.zig
 @@ -2760,6 +2760,7 @@ pub const Resolver = struct {
@@ -1971,44 +1971,46 @@ index dbc49a3..c9a6563 100644
              }
          }
  
-@@ -2846,20 +2848,33 @@ pub const Resolver = struct {
+@@ -2846,14 +2848,22 @@ pub const Resolver = struct {
  
                  bun.fs.debug("open({s}) = {any}", .{ sentinel, open_req });
  
 -                break :open_dir open_req catch |err| switch (@as(anyerror, err)) {
+-                    // Ignore "ENOTDIR" here so that calling "ReadDirectory" on a file behaves
+-                    // as if there is nothing there at all instead of causing an error due to
+-                    // the directory actually being a file. This is a workaround for situations
+-                    // where people try to import from a path containing a file as a parent
+-                    // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
+-                    // list which contains such paths and treating them as missing means we just
+-                    // ignore them during path resolution.
++                // On Android/Termux non-root, ancestor directories (/, /data, /data/data)
++                // cannot be opened (EACCES). Skip them instead of returning null so the
++                // resolver can continue processing deeper directories.
++                var should_skip = false;
 +                if (open_req) |dir| {
 +                    break :open_dir dir;
 +                } else |err| switch (@as(anyerror, err)) {
-                     // Ignore "ENOTDIR" here so that calling "ReadDirectory" on a file behaves
-                     // as if there is nothing there at all instead of causing an error due to
-                     // the directory actually being a file. This is a workaround for situations
-                     // where people try to import from a path containing a file as a parent
-                     // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
-                     // list which contains such paths and treating them as missing means we just
--                    // ignore them during path resolution.
-+                    // ignore them during path resolution. On Android/Termux (non-root), the
-+                    // directories /data/ and /data/data/ cannot be listed by unprivileged
-+                    // processes (EACCES). The resolver walks up from the CWD looking for
-+                    // node_modules, so it will hit these restricted directories. Treat
-+                    // AccessDenied like FileNotFound to prevent spurious error messages.
-                     error.ENOENT,
-                     error.ENOTDIR,
-                     error.IsDir,
-                     error.NotDir,
-                     error.FileNotFound,
--                    => return null,
 +                    error.EACCES,
 +                    error.AccessDenied,
 +                    => {
 +                        const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
 +                        r.dir_cache.markNotFound(queue_top.result);
 +                        rfs.entries.markNotFound(cached_dir_entry_result);
-+                        continue;
++                        should_skip = true;
 +                    },
++
+                     error.ENOENT,
+                     error.ENOTDIR,
+                     error.IsDir,
+@@ -2882,6 +2892,7 @@ pub const Resolver = struct {
+                         return null;
+                     },
+                 };
++                if (should_skip) continue;
+             };
  
-                     else => {
-                         const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
-@@ -3811,7 +3826,11 @@ pub const Resolver = struct {
+             if (!queue_top.fd.isValid()) {
+@@ -3811,7 +3822,11 @@ pub const Resolver = struct {
          };
  
          if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
