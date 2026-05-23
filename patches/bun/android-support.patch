@@ -2173,3 +2173,57 @@ index 7d8ef7c..0d8f40f 100644
  
      // On linux, bun overrides the libc symbols for various functions.
      // This is to compensate for older glibc versions.
+diff --git a/src/bun.js/ModuleLoader.zig b/src/bun.js/ModuleLoader.zig
+index 48845db..997901f 100644
+--- a/src/bun.js/ModuleLoader.zig
++++ b/src/bun.js/ModuleLoader.zig
+@@ -2041,17 +2041,19 @@ fn dumpSourceStringFailiable(vm: *VirtualMachine, specifier: string, written: []
+     defer BunDebugHolder.lock.unlock();
+ 
+     const dir = BunDebugHolder.dir orelse dir: {
+-        const base_name = switch (Environment.os) {
+-            else => "/tmp/bun-debug-src/",
+-            .windows => brk: {
+-                const temp = bun.fs.FileSystem.RealFS.platformTempDir();
+-                var win_temp_buffer: bun.PathBuffer = undefined;
+-                @memcpy(win_temp_buffer[0..temp.len], temp);
+-                const suffix = "\\bun-debug-src";
+-                @memcpy(win_temp_buffer[temp.len .. temp.len + suffix.len], suffix);
+-                win_temp_buffer[temp.len + suffix.len] = 0;
+-                break :brk win_temp_buffer[0 .. temp.len + suffix.len :0];
+-            },
++        const base_name = brk: {
++            const temp = bun.fs.FileSystem.RealFS.platformTempDir();
++            var tmp_buffer: bun.PathBuffer = undefined;
++            const suffix = switch (Environment.os) {
++                .windows => "\\bun-debug-src",
++                else => "/bun-debug-src",
++            };
++            const len = temp.len + suffix.len;
++            if (len >= tmp_buffer.len) @panic("temp dir path too long");
++            @memcpy(tmp_buffer[0..temp.len], temp);
++            @memcpy(tmp_buffer[temp.len..][0..suffix.len], suffix);
++            tmp_buffer[len] = 0;
++            break :brk tmp_buffer[0..len :0];
+         };
+         const dir = try std.fs.cwd().makeOpenPath(base_name, .{});
+         BunDebugHolder.dir = dir;
+diff --git a/src/fs.zig b/src/fs.zig
+index 28ae78a..377744e 100644
+--- a/src/fs.zig
++++ b/src/fs.zig
+@@ -585,7 +585,13 @@ pub const FileSystem = struct {
+                     return value;
+                 },
+                 .mac => "/private/tmp",
+-                else => "/tmp",
++                else => brk: {
++                    if (comptime Environment.isLinux or comptime Environment.isAndroid) {
++                        if (bun.getenvZ("TMPDIR")) |tmpdir| break :brk tmpdir;
++                        if (bun.getenvZ("TMP")) |tmp| break :brk tmp;
++                    }
++                    break :brk "/tmp";
++                },
+             };
+         }
+ 
