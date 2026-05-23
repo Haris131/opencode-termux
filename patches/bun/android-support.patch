@@ -1945,7 +1945,7 @@ index 4187c86..093c65e 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
-index dbc49a3..d45e461 100644
+index dbc49a3..1cf28b5 100644
 --- a/src/resolver/resolver.zig
 +++ b/src/resolver/resolver.zig
 @@ -2760,6 +2760,7 @@ pub const Resolver = struct {
@@ -1971,7 +1971,7 @@ index dbc49a3..d45e461 100644
              }
          }
  
-@@ -2846,14 +2848,22 @@ pub const Resolver = struct {
+@@ -2846,41 +2848,40 @@ pub const Resolver = struct {
  
                  bun.fs.debug("open({s}) = {any}", .{ sentinel, open_req });
  
@@ -1983,34 +1983,67 @@ index dbc49a3..d45e461 100644
 -                    // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
 -                    // list which contains such paths and treating them as missing means we just
 -                    // ignore them during path resolution.
+-                    error.ENOENT,
+-                    error.ENOTDIR,
+-                    error.IsDir,
+-                    error.NotDir,
+-                    error.FileNotFound,
+-                    => return null,
+-
+-                    else => {
 +                // On Android/Termux non-root, ancestor directories (/, /data, /data/data)
 +                // cannot be opened (EACCES). Skip them instead of returning null so the
 +                // resolver can continue processing deeper directories.
-+                var should_skip = false;
 +                if (open_req) |dir| {
 +                    break :open_dir dir;
-+                } else |err| switch (@as(anyerror, err)) {
-+                    error.EACCES,
-+                    error.AccessDenied,
-+                    => {
-+                        const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
-+                        r.dir_cache.markNotFound(queue_top.result);
-+                        rfs.entries.markNotFound(cached_dir_entry_result);
-+                        should_skip = true;
-+                    },
-+
-                     error.ENOENT,
-                     error.ENOTDIR,
-                     error.IsDir,
-@@ -2882,6 +2892,7 @@ pub const Resolver = struct {
++                } else |err| {
++                    const code = @as(anyerror, err);
++                    if (code == error.EACCES or code == error.AccessDenied) {
+                         const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
+                         r.dir_cache.markNotFound(queue_top.result);
+                         rfs.entries.markNotFound(cached_dir_entry_result);
+-                        if (comptime enable_logging) {
+-                            const pretty = queue_top.unsafe_path;
+-
+-                            r.log.addErrorFmt(
+-                                null,
+-                                logger.Loc{},
+-                                r.allocator,
+-                                "Cannot read directory \"{s}\": {s}",
+-                                .{
+-                                    pretty,
+-                                    @errorName(err),
+-                                },
+-                            ) catch {};
+-                        }
++                        continue;
++                    }
++                    if (code == error.ENOENT or code == error.ENOTDIR or code == error.IsDir or code == error.NotDir or code == error.FileNotFound) {
                          return null;
-                     },
+-                    },
++                    }
++                    const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
++                    r.dir_cache.markNotFound(queue_top.result);
++                    rfs.entries.markNotFound(cached_dir_entry_result);
++                    if (comptime enable_logging) {
++                        const pretty = queue_top.unsafe_path;
++
++                        r.log.addErrorFmt(
++                            null,
++                            logger.Loc{},
++                            r.allocator,
++                            "Cannot read directory \"{s}\": {s}",
++                            .{
++                                pretty,
++                                @errorName(err),
++                            },
++                        ) catch {};
++                    }
++                    return null;
                  };
-+                if (should_skip) continue;
              };
  
-             if (!queue_top.fd.isValid()) {
-@@ -3811,7 +3822,11 @@ pub const Resolver = struct {
+@@ -3811,7 +3812,11 @@ pub const Resolver = struct {
          };
  
          if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
