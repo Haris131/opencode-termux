@@ -395,9 +395,32 @@ index c960084..aa591ff 100644
 +      -Wl,--wrap=logf
 +      -Wl,--wrap=pow
 +      -Wl,--wrap=powf
-+    )
+     )
+-  endif()
 +    endif()
-+
+ 
+-  target_link_options(${bun} PUBLIC
+-    --ld-path=${LLD_PROGRAM}
+-    -fno-pic
+-    -Wl,-no-pie
+-    -Wl,-icf=safe
+-    -Wl,--as-needed
+-    -Wl,--gc-sections
+-    -Wl,-z,stack-size=12800000
+-    -Wl,--compress-debug-sections=zlib
+-    -Wl,-z,lazy
+-    -Wl,-z,norelro
+-    # enable string tail merging
+-    -Wl,-O2
+-    # make debug info faster to load
+-    -Wl,--gdb-index
+-    -Wl,-z,combreloc
+-    -Wl,--no-eh-frame-hdr
+-    -Wl,--sort-section=name
+-    -Wl,--hash-style=both
+-    -Wl,--build-id=sha1  # Better for debugging than default
+-    -Wl,-Map=${bun}.linker-map
+-  )
 +    if(NOT ABI STREQUAL "musl")
 +      target_link_options(${bun} PUBLIC
 +        -static-libstdc++
@@ -431,31 +454,8 @@ index c960084..aa591ff 100644
 +      -Wl,--hash-style=both
 +      -Wl,--build-id=sha1  # Better for debugging than default
 +      -Wl,-Map=${bun}.linker-map
-     )
-   endif()
--
--  target_link_options(${bun} PUBLIC
--    --ld-path=${LLD_PROGRAM}
--    -fno-pic
--    -Wl,-no-pie
--    -Wl,-icf=safe
--    -Wl,--as-needed
--    -Wl,--gc-sections
--    -Wl,-z,stack-size=12800000
--    -Wl,--compress-debug-sections=zlib
--    -Wl,-z,lazy
--    -Wl,-z,norelro
--    # enable string tail merging
--    -Wl,-O2
--    # make debug info faster to load
--    -Wl,--gdb-index
--    -Wl,-z,combreloc
--    -Wl,--no-eh-frame-hdr
--    -Wl,--sort-section=name
--    -Wl,--hash-style=both
--    -Wl,--build-id=sha1  # Better for debugging than default
--    -Wl,-Map=${bun}.linker-map
--  )
++    )
++  endif()
  endif()
  
  # --- Symbols list ---
@@ -1945,7 +1945,7 @@ index 4187c86..093c65e 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
-index dbc49a3..b62806b 100644
+index dbc49a3..cf46ad9 100644
 --- a/src/resolver/resolver.zig
 +++ b/src/resolver/resolver.zig
 @@ -2760,6 +2760,7 @@ pub const Resolver = struct {
@@ -1971,7 +1971,7 @@ index dbc49a3..b62806b 100644
              }
          }
  
-@@ -2846,42 +2848,41 @@ pub const Resolver = struct {
+@@ -2846,42 +2848,51 @@ pub const Resolver = struct {
  
                  bun.fs.debug("open({s}) = {any}", .{ sentinel, open_req });
  
@@ -1991,17 +1991,9 @@ index dbc49a3..b62806b 100644
 -                    => return null,
 -
 -                    else => {
-+                // On Android/Termux non-root, ancestor directories (/, /data, /data/data)
-+                // cannot be opened (EACCES). Skip them instead of returning null so the
-+                // resolver can continue processing deeper directories.
-+                if (open_req) |dir| {
-+                    break :open_dir dir;
-+                } else |err| {
-+                    const code = @as(anyerror, err);
-+                    if (code == error.EACCES or code == error.AccessDenied) {
-                         const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
-                         r.dir_cache.markNotFound(queue_top.result);
-                         rfs.entries.markNotFound(cached_dir_entry_result);
+-                        const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
+-                        r.dir_cache.markNotFound(queue_top.result);
+-                        rfs.entries.markNotFound(cached_dir_entry_result);
 -                        if (comptime enable_logging) {
 -                            const pretty = queue_top.unsafe_path;
 -
@@ -2016,36 +2008,57 @@ index dbc49a3..b62806b 100644
 -                                },
 -                            ) catch {};
 -                        }
-+                        continue;
-+                    }
-+                    if (code == error.ENOENT or code == error.ENOTDIR or code == error.IsDir or code == error.NotDir or code == error.FileNotFound) {
-                         return null;
+-                        return null;
 -                    },
--                };
-+                    }
-+                    const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
-+                    r.dir_cache.markNotFound(queue_top.result);
-+                    rfs.entries.markNotFound(cached_dir_entry_result);
-+                    if (comptime enable_logging) {
-+                        const pretty = queue_top.unsafe_path;
++                const open_result = open_req catch |err| {
++                    switch (@as(anyerror, err)) {
++                        // Ignore "ENOTDIR" here so that calling "ReadDirectory" on a file behaves
++                        // as if there is nothing there at all instead of causing an error due to
++                        // the directory actually being a file. This is a workaround for situations
++                        // where people try to import from a path containing a file as a parent
++                        // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
++                        // list which contains such paths and treating them as missing means we just
++                        // ignore them during path resolution. On Android/Termux (non-root), the
++                        // directories /data/ and /data/data/ cannot be listed by unprivileged
++                        // processes (EACCES). The resolver walks up from the CWD looking for
++                        // node_modules, so it will hit these restricted directories. Treat
++                        // AccessDenied like FileNotFound to prevent spurious error messages.
++                        error.ENOENT,
++                        error.ENOTDIR,
++                        error.IsDir,
++                        error.NotDir,
++                        error.FileNotFound,
++                        error.EACCES,
++                        error.AccessDenied,
++                        => return null,
 +
-+                        r.log.addErrorFmt(
-+                            null,
-+                            logger.Loc{},
-+                            r.allocator,
-+                            "Cannot read directory \"{s}\": {s}",
-+                            .{
-+                                pretty,
-+                                @errorName(err),
-+                            },
-+                        ) catch {};
++                        else => {
++                            const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
++                            r.dir_cache.markNotFound(queue_top.result);
++                            rfs.entries.markNotFound(cached_dir_entry_result);
++                            if (comptime enable_logging) {
++                                const pretty = queue_top.unsafe_path;
++
++                                r.log.addErrorFmt(
++                                    null,
++                                    logger.Loc{},
++                                    r.allocator,
++                                    "Cannot read directory \"{s}\": {s}",
++                                    .{
++                                        pretty,
++                                        @errorName(err),
++                                    },
++                                ) catch {};
++                            }
++                            return null;
++                        },
 +                    }
-+                    return null;
-+                }
+                 };
++                break :open_dir open_result;
              };
  
              if (!queue_top.fd.isValid()) {
-@@ -3811,7 +3812,11 @@ pub const Resolver = struct {
+@@ -3811,7 +3822,11 @@ pub const Resolver = struct {
          };
  
          if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
