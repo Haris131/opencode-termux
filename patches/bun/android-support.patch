@@ -2218,8 +2218,8 @@ index 28ae78a..377744e 100644
                  .mac => "/private/tmp",
 -                else => "/tmp",
 +                else => brk: {
-+                    if (comptime Environment.isLinux or comptime Environment.isAndroid) {
-+                        if (bun.getenvZ("TMPDIR")) |tmpdir| break :brk tmpdir;
++                    if (comptime Environment.isLinux or Environment.isAndroid) {
++                        if (bun.getenvZ("TMPDIR")) |tmpdir_path| break :brk tmpdir_path;
 +                        if (bun.getenvZ("TMP")) |tmp| break :brk tmp;
 +                    }
 +                    break :brk "/tmp";
