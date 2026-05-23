@@ -1324,6 +1324,31 @@ index f5790e3..4fadcc0 100644
  
      const helpers = struct {
          // We'll skip interfaces that aren't actually available
+diff --git a/src/cli/run_command.zig b/src/cli/run_command.zig
+index c9daabb..1d4c23e 100644
+--- a/src/cli/run_command.zig
++++ b/src/cli/run_command.zig
+@@ -831,10 +831,16 @@ pub const RunCommand = struct {
+             Output.flush();
+             return err;
+         } orelse {
+-            ctx.log.print(Output.errorWriter()) catch {};
+-            Output.prettyErrorln("error loading current directory", .{});
+-            Output.flush();
+-            return error.CouldntReadCurrentDirectory;
++            if (comptime Environment.isAndroid) {
++                // On Android/Termux non-root, /data and /data/data ancestors
++                // are not readable (EACCES). This is expected — skip
++                // package.json resolution from ancestor directories.
++            } else {
++                ctx.log.print(Output.errorWriter()) catch {};
++                Output.prettyErrorln("error loading current directory", .{});
++                Output.flush();
++                return error.CouldntReadCurrentDirectory;
++            }
+         };
+ 
+         this_transpiler.resolver.store_fd = false;
 diff --git a/src/cli/upgrade_command.zig b/src/cli/upgrade_command.zig
 index d4bdc2a..184fb08 100644
 --- a/src/cli/upgrade_command.zig
@@ -1945,7 +1970,7 @@ index 4187c86..093c65e 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
-index dbc49a3..ca4e9f0 100644
+index dbc49a3..cf46ad9 100644
 --- a/src/resolver/resolver.zig
 +++ b/src/resolver/resolver.zig
 @@ -2760,6 +2760,7 @@ pub const Resolver = struct {
@@ -1971,36 +1996,92 @@ index dbc49a3..ca4e9f0 100644
              }
          }
  
-@@ -2853,13 +2855,26 @@ pub const Resolver = struct {
-                     // where people try to import from a path containing a file as a parent
-                     // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
-                     // list which contains such paths and treating them as missing means we just
--                    // ignore them during path resolution.
-+                    // ignore them during path resolution. On Android/Termux (non-root), the
-+                    // directories /data/ and /data/data/ cannot be listed by unprivileged
-+                    // processes (EACCES). The resolver walks up from the CWD looking for
-+                    // node_modules, so it will hit these restricted directories. Treat
-+                    // AccessDenied like FileNotFound to prevent spurious error messages.
-                     error.ENOENT,
-                     error.ENOTDIR,
-                     error.IsDir,
-                     error.NotDir,
-                     error.FileNotFound,
--                    => return null,
-+                    error.EACCES,
-+                    error.AccessDenied,
-+                    => {
-+                        // Cannot read this directory (e.g. /data on Android/Termux).
-+                        // Skip it so resolution can continue up the tree.
-+                        const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
-+                        r.dir_cache.markNotFound(queue_top.result);
-+                        rfs.entries.markNotFound(cached_dir_entry_result);
-+                        continue;
-+                    },
+@@ -2846,42 +2848,51 @@ pub const Resolver = struct {
  
-                     else => {
-                         const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
-@@ -3811,7 +3826,11 @@ pub const Resolver = struct {
+                 bun.fs.debug("open({s}) = {any}", .{ sentinel, open_req });
+ 
+-                break :open_dir open_req catch |err| switch (@as(anyerror, err)) {
+-                    // Ignore "ENOTDIR" here so that calling "ReadDirectory" on a file behaves
+-                    // as if there is nothing there at all instead of causing an error due to
+-                    // the directory actually being a file. This is a workaround for situations
+-                    // where people try to import from a path containing a file as a parent
+-                    // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
+-                    // list which contains such paths and treating them as missing means we just
+-                    // ignore them during path resolution.
+-                    error.ENOENT,
+-                    error.ENOTDIR,
+-                    error.IsDir,
+-                    error.NotDir,
+-                    error.FileNotFound,
+-                    => return null,
++                const open_result = open_req catch |err| {
++                    switch (@as(anyerror, err)) {
++                        // Ignore "ENOTDIR" here so that calling "ReadDirectory" on a file behaves
++                        // as if there is nothing there at all instead of causing an error due to
++                        // the directory actually being a file. This is a workaround for situations
++                        // where people try to import from a path containing a file as a parent
++                        // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
++                        // list which contains such paths and treating them as missing means we just
++                        // ignore them during path resolution. On Android/Termux (non-root), the
++                        // directories /data/ and /data/data/ cannot be listed by unprivileged
++                        // processes (EACCES). The resolver walks up from the CWD looking for
++                        // node_modules, so it will hit these restricted directories. Treat
++                        // AccessDenied like FileNotFound to prevent spurious error messages.
++                        error.ENOENT,
++                        error.ENOTDIR,
++                        error.IsDir,
++                        error.NotDir,
++                        error.FileNotFound,
++                        error.EACCES,
++                        error.AccessDenied,
++                        => return null,
+ 
+-                    else => {
+-                        const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
+-                        r.dir_cache.markNotFound(queue_top.result);
+-                        rfs.entries.markNotFound(cached_dir_entry_result);
+-                        if (comptime enable_logging) {
+-                            const pretty = queue_top.unsafe_path;
++                        else => {
++                            const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
++                            r.dir_cache.markNotFound(queue_top.result);
++                            rfs.entries.markNotFound(cached_dir_entry_result);
++                            if (comptime enable_logging) {
++                                const pretty = queue_top.unsafe_path;
+ 
+-                            r.log.addErrorFmt(
+-                                null,
+-                                logger.Loc{},
+-                                r.allocator,
+-                                "Cannot read directory \"{s}\": {s}",
+-                                .{
+-                                    pretty,
+-                                    @errorName(err),
+-                                },
+-                            ) catch {};
+-                        }
+-                        return null;
+-                    },
++                                r.log.addErrorFmt(
++                                    null,
++                                    logger.Loc{},
++                                    r.allocator,
++                                    "Cannot read directory \"{s}\": {s}",
++                                    .{
++                                        pretty,
++                                        @errorName(err),
++                                    },
++                                ) catch {};
++                            }
++                            return null;
++                        },
++                    }
+                 };
++                break :open_dir open_result;
+             };
+ 
+             if (!queue_top.fd.isValid()) {
+@@ -3811,7 +3822,11 @@ pub const Resolver = struct {
          };
  
          if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
