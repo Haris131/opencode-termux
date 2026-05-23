@@ -1945,7 +1945,7 @@ index 4187c86..093c65e 100644
          std.os.linux.syscall6(
              .epoll_pwait2,
 diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
-index dbc49a3..cf46ad9 100644
+index dbc49a3..9d46610 100644
 --- a/src/resolver/resolver.zig
 +++ b/src/resolver/resolver.zig
 @@ -2760,6 +2760,7 @@ pub const Resolver = struct {
@@ -1971,7 +1971,31 @@ index dbc49a3..cf46ad9 100644
              }
          }
  
-@@ -2846,42 +2848,51 @@ pub const Resolver = struct {
+@@ -2826,6 +2828,23 @@ pub const Resolver = struct {
+                 defer path.ptr[queue_top.unsafe_path.len] = prev_char;
+                 const sentinel = path.ptr[0..queue_top.unsafe_path.len :0];
+ 
++                // On Android/Termux (non-root), ancestor directories (/, /data, /data/data)
++                // cannot be read (EACCES). Check accessibility first so we can skip them
++                // with `continue` at the while-loop level, avoiding a `continue` inside a
++                // `catch |err|` block which triggers a Zig codegen null-deref bug.
++                if (comptime Environment.isAndroid) {
++                    const rc = std.posix.system.access(sentinel, std.posix.R_OK);
++                    if (rc != 0) {
++                        const errno_v = std.posix.errno(rc);
++                        if (errno_v == .ACCES or errno_v == .PERM) {
++                            const cached_dir_entry_result = rfs.entries.getOrPut(queue_top.unsafe_path) catch unreachable;
++                            r.dir_cache.markNotFound(queue_top.result);
++                            rfs.entries.markNotFound(cached_dir_entry_result);
++                            continue;
++                        }
++                    }
++                }
++
+                 const open_req = if (comptime Environment.isPosix)
+                     std.fs.openDirAbsoluteZ(
+                         sentinel,
+@@ -2846,42 +2865,46 @@ pub const Resolver = struct {
  
                  bun.fs.debug("open({s}) = {any}", .{ sentinel, open_req });
  
@@ -2018,18 +2042,13 @@ index dbc49a3..cf46ad9 100644
 +                        // where people try to import from a path containing a file as a parent
 +                        // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
 +                        // list which contains such paths and treating them as missing means we just
-+                        // ignore them during path resolution. On Android/Termux (non-root), the
-+                        // directories /data/ and /data/data/ cannot be listed by unprivileged
-+                        // processes (EACCES). The resolver walks up from the CWD looking for
-+                        // node_modules, so it will hit these restricted directories. Treat
-+                        // AccessDenied like FileNotFound to prevent spurious error messages.
++                        // ignore them during path resolution.
++                        // On Android, EACCES is handled by the access() check above.
 +                        error.ENOENT,
 +                        error.ENOTDIR,
 +                        error.IsDir,
 +                        error.NotDir,
 +                        error.FileNotFound,
-+                        error.EACCES,
-+                        error.AccessDenied,
 +                        => return null,
 +
 +                        else => {
@@ -2058,7 +2077,7 @@ index dbc49a3..cf46ad9 100644
              };
  
              if (!queue_top.fd.isValid()) {
-@@ -3811,7 +3822,11 @@ pub const Resolver = struct {
+@@ -3811,7 +3834,11 @@ pub const Resolver = struct {
          };
  
          if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
