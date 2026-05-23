@@ -2042,7 +2042,30 @@ diff --git a/src/resolver/resolver.zig b/src/resolver/resolver.zig
 index dbc49a3..a69e238 100644
 --- a/src/resolver/resolver.zig
 +++ b/src/resolver/resolver.zig
-@@ -2853,12 +2853,18 @@ pub const Resolver = struct {
+@@ -2760,6 +2760,7 @@ pub const Resolver = struct {
+             if (result.status != .unknown) {
+                 top_parent = result;
+             } else {
++                root_handle: {
+                 bufs(.dir_entry_paths_to_resolve)[@as(usize, @intCast(i))] = DirEntryResolveQueueItem{
+                     .unsafe_path = root_path,
+                     .result = result,
+@@ -2773,12 +2774,13 @@ pub const Resolver = struct {
+                         },
+                         .err => |err| {
+                             debuglog("Failed to load DirEntry {s}  {s} - {s}", .{ top, @errorName(err.original_err), @errorName(err.canonical_error) });
+-                            return err.canonical_error;
++                            break :root_handle;
+                         },
+                     }
+                 }
+
+                 i += 1;
++                }
+             }
+         }
+
+@@ -2853,12 +2855,18 @@ pub const Resolver = struct {
                      // where people try to import from a path containing a file as a parent
                      // directory. The "pnpm" package manager generates a faulty "NODE_PATH"
                      // list which contains such paths and treating them as missing means we just
@@ -2062,7 +2085,7 @@ index dbc49a3..a69e238 100644
                      => return null,
  
                      else => {
-@@ -3811,7 +3817,11 @@ pub const Resolver = struct {
+@@ -3811,7 +3819,11 @@ pub const Resolver = struct {
          };
  
          if (@as(Fs.FileSystem.RealFS.EntriesOption.Tag, dir_entry.*) == .err) {
