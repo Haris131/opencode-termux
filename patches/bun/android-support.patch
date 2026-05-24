@@ -1864,8 +1864,8 @@ index 16a1386..18acdef 100644
 -                .fromNative(@intCast(@intFromPtr(socket.getNativeHandle(is_ssl))));
 +                // On 64-bit Android, @intFromPtr produces usize (64-bit).
 +                // The native handle is a file descriptor stored as a pointer,
-+                // so it fits in i32. Use @intCast to convert and truncate.
-+                .fromNative(@as(i32, @intCast(@intFromPtr(socket.getNativeHandle(is_ssl)))));
++                // so it fits in i32. Use @truncate to safely discard high bits.
++                .fromNative(@as(i32, @truncate(@intFromPtr(socket.getNativeHandle(is_ssl)))));
          }
  
          pub fn markNeedsMoreForSendfile(this: ThisSocket) void {
