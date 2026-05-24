@@ -24,9 +24,8 @@ source "$SCRIPT_DIR/env.sh"
 DEBUG="${DEBUG:-}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 if [ -n "$DEBUG" ]; then
-  BUILD_TYPE="RelWithDebInfo"
-  # Zig debug mode with safety checks
-  ZIG_DEBUG_FLAGS="-Doptimize=Debug"
+  BUILD_TYPE="Debug"
+  ZIG_DEBUG_FLAGS="-DZIG_OPTIMIZE=Debug"
   echo "=== Building Bun v${BUN_VERSION} for Android aarch64 (DEBUG MODE) ==="
 else
   ZIG_DEBUG_FLAGS=""
