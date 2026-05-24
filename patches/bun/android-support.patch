@@ -853,22 +853,22 @@ index 267d1f8..dcc64b7 100644
              return null;
          }
  
-@@ -267,6 +269,11 @@ pub const StandaloneModuleGraph = struct {
+@@ -269,6 +271,14 @@ pub const StandaloneModuleGraph = struct {
          byte_count: usize = 0,
          modules_ptr: bun.StringPointer = .{},
          entry_point_id: u32 = 0,
-+    };
-+
+     };
+
 +    pub const Flags = packed struct(u32) {
 +        disable_default_env_files: bool = false,
 +        disable_autoload_bunfig: bool = false,
 +        disable_autoload_tsconfig: bool = false,
 +        disable_autoload_package_json: bool = false,
 +        _padding: u28 = 0,
-     };
- 
++    };
++
      const trailer = "\n---- Bun! ----\n";
-@@ -310,6 +317,8 @@ pub const StandaloneModuleGraph = struct {
+@@ -310,6 +320,8 @@ pub const StandaloneModuleGraph = struct {
              .bytes = raw_bytes[0..offsets.byte_count],
              .files = modules,
              .entry_point_id = offsets.entry_point_id,
