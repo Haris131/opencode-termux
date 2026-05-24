@@ -222,7 +222,7 @@ const hostBytes = new Uint8Array(hostBinary)
 //   [total_byte_count as u64 LE (8 bytes)]
 //
 // Module graph internal layout:
-//   [string data] [module list] [offsets (32 bytes)] [trailer "\n---- Bun! ----\n" (16 bytes)]
+//   [string data] [module list] [offsets (28 bytes)] [trailer "\n---- Bun! ----\n" (16 bytes)]
 //
 // offsets.byte_count = len(string_data) + len(module_list)
 // total_byte_count = seek_pos + len(module_graph) + 8 = file_size
@@ -233,7 +233,7 @@ const hostBytes = new Uint8Array(hostBinary)
 
 const TRAILER_STR = "\n---- Bun! ----\n"
 const TRAILER_LEN = TRAILER_STR.length  // 16
-const OFFSETS_SIZE_CONST = 20
+const OFFSETS_SIZE_CONST = 28
 
 // Find trailer: it's near the end of the file, just before the final 8-byte u64.
 // Search backwards from (end - 8) for the trailer sentinel.
@@ -254,7 +254,7 @@ if (!foundTrailer) {
   process.exit(1)
 }
 
-// Read offsets struct (32 bytes) just before the trailer
+// Read offsets struct (28 bytes) just before the trailer
 const offsetsStart = expectedTrailerStart - OFFSETS_SIZE_CONST
 const offsetsByteCount = Number(searchBuf.readBigUInt64LE(offsetsStart))
 
@@ -281,18 +281,20 @@ console.log("\n=== Step 6: Patching module graph for Android ===")
 // The module graph format (from StandaloneModuleGraph.zig):
 //   [string data: all file names, contents, sourcemaps, bytecodes concatenated]
 //   [CompiledModuleGraphFile array]
-//   [Offsets struct: 32 bytes]
+//   [Offsets struct: 28 bytes]
 //   [trailer: "\n---- Bun! ----\n"]
 //
-// Offsets struct layout (20 bytes, little-endian, Bun v1.2.x):
+// Offsets struct layout (28 bytes, little-endian, Bun v1.3.2 - host version):
 //   byte_count:              u64  (8 bytes) - size of everything before the Offsets struct
 //   modules_ptr.offset:      u32  (4 bytes)
 //   modules_ptr.length:      u32  (4 bytes)
 //   entry_point_id:          u32  (4 bytes)
+//   compile_exec_argv_ptr.offset: u32 (4 bytes)
+//   compile_exec_argv_ptr.length: u32 (4 bytes)
 //
-// NOTE: Do NOT add fields here — the host Bun v1.2.13 writes a 20-byte Offsets.
-// The Android binary must read the same size. Adding fields shifts all offsets
-// and causes garbage reads → integer panics.
+// NOTE: Must match the host Bun version used for `bun build --compile` (v1.3.2).
+// The Android binary reads the module graph written by the host Bun — Offsets
+// size must be identical (28 bytes) or all field offsets will be garbage.
 //
 // NOTE: CompiledModuleGraphFile layout varies between Bun versions:
 //   - Bun 1.2.x: 36 bytes (4 StringPointers + 3 u8 + 1 padding)
@@ -304,7 +306,7 @@ console.log("\n=== Step 6: Patching module graph for Android ===")
 
 const mgTrailer = "\n---- Bun! ----\n"
 const mgTrailerBuf = Buffer.from(mgTrailer)
-const OFFSETS_SIZE = 20
+const OFFSETS_SIZE = 28
 
 // Parse the module graph — only the Offsets struct (version-independent)
 const mgBuf = Buffer.from(moduleGraphBytes)
