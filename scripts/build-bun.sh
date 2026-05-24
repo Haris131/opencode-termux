@@ -24,9 +24,13 @@ source "$SCRIPT_DIR/env.sh"
 DEBUG="${DEBUG:-}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 if [ -n "$DEBUG" ]; then
-  BUILD_TYPE="Debug"
+  # Use RelWithDebInfo for C/C++ (-O2 -g, no sanitizers) but force Zig to
+  # Debug mode for full safety checks and stack traces. CMAKE_BUILD_TYPE=Debug
+  # adds -O0 and -fsanitize flags which break C++ template instantiation on
+  # cross-compilation (JSBuffer.cpp: undefined template s_info).
+  BUILD_TYPE="RelWithDebInfo"
   ZIG_DEBUG_FLAGS="-DZIG_OPTIMIZE=Debug"
-  echo "=== Building Bun v${BUN_VERSION} for Android aarch64 (DEBUG MODE) ==="
+  echo "=== Building Bun v${BUN_VERSION} for Android aarch64 (ZIG DEBUG MODE) ==="
 else
   ZIG_DEBUG_FLAGS=""
   echo "=== Building Bun v${BUN_VERSION} for Android aarch64 ==="
