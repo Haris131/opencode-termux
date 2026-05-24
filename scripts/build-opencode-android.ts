@@ -222,7 +222,7 @@ const hostBytes = new Uint8Array(hostBinary)
 //   [total_byte_count as u64 LE (8 bytes)]
 //
 // Module graph internal layout:
-//   [string data] [module list] [offsets (28 bytes)] [trailer "\n---- Bun! ----\n" (16 bytes)]
+//   [string data] [module list] [offsets (32 bytes)] [trailer "\n---- Bun! ----\n" (16 bytes)]
 //
 // offsets.byte_count = len(string_data) + len(module_list)
 // total_byte_count = seek_pos + len(module_graph) + 8 = file_size
@@ -233,7 +233,21 @@ const hostBytes = new Uint8Array(hostBinary)
 
 const TRAILER_STR = "\n---- Bun! ----\n"
 const TRAILER_LEN = TRAILER_STR.length  // 16
-const OFFSETS_SIZE_CONST = 28
+const OFFSETS_SIZE_CONST = 32
+
+// DEBUG: dump last 100 bytes
+const debugEnd = hostBytes.length
+const debugStart = Math.max(0, debugEnd - 100)
+console.log(`\n=== DEBUG: last 100 bytes of host binary ===`)
+console.log(`File size: ${debugEnd}`)
+const debugSlice = Buffer.from(hostBytes.buffer, debugStart, debugEnd - debugStart)
+for (let i = 0; i < debugSlice.length; i += 16) {
+  const hex = Array.from(debugSlice.slice(i, Math.min(i+16, debugSlice.length)))
+    .map(b => b.toString(16).padStart(2, '0')).join(' ')
+  const ascii = Array.from(debugSlice.slice(i, Math.min(i+16, debugSlice.length)))
+    .map(b => b >= 32 && b <= 126 ? String.fromCharCode(b) : '.').join('')
+  console.log(`  [${debugStart + i}] ${hex.padEnd(48)} ${ascii}`)
+}
 
 // Find trailer: it's near the end of the file, just before the final 8-byte u64.
 // Search backwards from (end - 8) for the trailer sentinel.
@@ -251,14 +265,31 @@ const foundTrailer = searchBuf.compare(
 if (!foundTrailer) {
   console.error("ERROR: Bun standalone trailer not found at expected position")
   console.error("       The standalone binary format may have changed.")
+  // Search backwards for trailer anywhere in the file
+  const trailerPos = searchBuf.lastIndexOf(trailerBuf)
+  if (trailerPos >= 0) {
+    console.error(`       However, trailer found at offset ${trailerPos} (expected ${expectedTrailerStart})`)
+    console.error(`       Gap from trailer end to file end: ${debugEnd - (trailerPos + TRAILER_LEN)} bytes (expected 8)`)
+  }
   process.exit(1)
 }
 
-// Read offsets struct (28 bytes) just before the trailer
+// Read offsets struct (32 bytes) just before the trailer
 const offsetsStart = expectedTrailerStart - OFFSETS_SIZE_CONST
-const offsetsByteCount = Number(searchBuf.readBigUInt64LE(offsetsStart))
 
-// Module graph total size = byte_count (string data + module list) + offsets(32) + trailer(16)
+// DEBUG: dump raw bytes around trailer
+console.log(`\n=== DEBUG: trailer at ${expectedTrailerStart}, offsets start: ${offsetsStart} ===`)
+const dumpStart = Math.max(0, offsetsStart - 8)
+const dumpSlice = Buffer.from(hostBytes.buffer, dumpStart, expectedTrailerStart + TRAILER_LEN - dumpStart)
+console.log(`Trailer text: ${searchBuf.toString('utf8', expectedTrailerStart, expectedTrailerStart + TRAILER_LEN)}`)
+console.log(`Last 8 bytes (total_size u64): ${Array.from(searchBuf.slice(debugEnd-8, debugEnd)).map(b => b.toString(16).padStart(2,'0')).join(' ')}`)
+console.log(`Total size as u64: ${Number(searchBuf.readBigUInt64LE(debugEnd-8))}`)
+
+const offsetsByteCount = Number(searchBuf.readBigUInt64LE(offsetsStart))
+console.log(`Raw byte_count: ${offsetsByteCount}`)
+console.log(`byte_count hex: ${Array.from(searchBuf.slice(offsetsStart, offsetsStart+8)).map(b => b.toString(16).padStart(2,'0')).join(' ')}`)
+
+// Module graph total size = byte_count (string data + module list) + offsets(28) + trailer(16)
 const moduleGraphSize = offsetsByteCount + OFFSETS_SIZE_CONST + TRAILER_LEN
 const hostBunSize = hostBytes.length - 8 - moduleGraphSize
 
@@ -281,20 +312,24 @@ console.log("\n=== Step 6: Patching module graph for Android ===")
 // The module graph format (from StandaloneModuleGraph.zig):
 //   [string data: all file names, contents, sourcemaps, bytecodes concatenated]
 //   [CompiledModuleGraphFile array]
-//   [Offsets struct: 28 bytes]
+//   [Offsets struct: 32 bytes]
 //   [trailer: "\n---- Bun! ----\n"]
 //
-// Offsets struct layout (28 bytes, little-endian, Bun v1.3.2 - host version):
+// Offsets struct layout (32 bytes, little-endian, C struct with 8-byte alignment):
 //   byte_count:              u64  (8 bytes) - size of everything before the Offsets struct
 //   modules_ptr.offset:      u32  (4 bytes)
 //   modules_ptr.length:      u32  (4 bytes)
 //   entry_point_id:          u32  (4 bytes)
 //   compile_exec_argv_ptr.offset: u32 (4 bytes)
 //   compile_exec_argv_ptr.length: u32 (4 bytes)
+//   _padding:                       (4 bytes) - trailing padding for 8-byte alignment
 //
 // NOTE: Must match the host Bun version used for `bun build --compile` (v1.3.2).
 // The Android binary reads the module graph written by the host Bun — Offsets
-// size must be identical (28 bytes) or all field offsets will be garbage.
+// size must be identical (32 bytes) or all field offsets will be garbage.
+//
+// @sizeOf(Offsets) = 32 for v1.3.2 (extern struct + trailing padding)
+// @sizeOf(Offsets) = 24 for v1.2.13 (without compile_exec_argv_ptr)
 //
 // NOTE: CompiledModuleGraphFile layout varies between Bun versions:
 //   - Bun 1.2.x: 36 bytes (4 StringPointers + 3 u8 + 1 padding)
@@ -306,7 +341,7 @@ console.log("\n=== Step 6: Patching module graph for Android ===")
 
 const mgTrailer = "\n---- Bun! ----\n"
 const mgTrailerBuf = Buffer.from(mgTrailer)
-const OFFSETS_SIZE = 28
+const OFFSETS_SIZE = 32
 
 // Parse the module graph — only the Offsets struct (version-independent)
 const mgBuf = Buffer.from(moduleGraphBytes)
