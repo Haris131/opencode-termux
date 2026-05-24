@@ -233,7 +233,7 @@ const hostBytes = new Uint8Array(hostBinary)
 
 const TRAILER_STR = "\n---- Bun! ----\n"
 const TRAILER_LEN = TRAILER_STR.length  // 16
-const OFFSETS_SIZE_CONST = 32
+const OFFSETS_SIZE_CONST = 20
 
 // Find trailer: it's near the end of the file, just before the final 8-byte u64.
 // Search backwards from (end - 8) for the trailer sentinel.
@@ -284,14 +284,15 @@ console.log("\n=== Step 6: Patching module graph for Android ===")
 //   [Offsets struct: 32 bytes]
 //   [trailer: "\n---- Bun! ----\n"]
 //
-// Offsets struct layout (32 bytes, little-endian, unchanged across Bun versions):
+// Offsets struct layout (20 bytes, little-endian, Bun v1.2.x):
 //   byte_count:              u64  (8 bytes) - size of everything before the Offsets struct
 //   modules_ptr.offset:      u32  (4 bytes)
 //   modules_ptr.length:      u32  (4 bytes)
 //   entry_point_id:          u32  (4 bytes)
-//   compile_exec_argv.offset:u32  (4 bytes)
-//   compile_exec_argv.length:u32  (4 bytes)
-//   flags:                   u32  (4 bytes)
+//
+// NOTE: Do NOT add fields here — the host Bun v1.2.13 writes a 20-byte Offsets.
+// The Android binary must read the same size. Adding fields shifts all offsets
+// and causes garbage reads → integer panics.
 //
 // NOTE: CompiledModuleGraphFile layout varies between Bun versions:
 //   - Bun 1.2.x: 36 bytes (4 StringPointers + 3 u8 + 1 padding)
@@ -303,7 +304,7 @@ console.log("\n=== Step 6: Patching module graph for Android ===")
 
 const mgTrailer = "\n---- Bun! ----\n"
 const mgTrailerBuf = Buffer.from(mgTrailer)
-const OFFSETS_SIZE = 32
+const OFFSETS_SIZE = 20
 
 // Parse the module graph — only the Offsets struct (version-independent)
 const mgBuf = Buffer.from(moduleGraphBytes)
@@ -316,9 +317,6 @@ const byteCount = Number(mgBuf.readBigUInt64LE(mgOffsetsStart))
 const modOff = mgBuf.readUInt32LE(mgOffsetsStart + 8)
 const modLen = mgBuf.readUInt32LE(mgOffsetsStart + 12)
 const entryId = mgBuf.readUInt32LE(mgOffsetsStart + 16)
-const argvOff = mgBuf.readUInt32LE(mgOffsetsStart + 20)
-const argvLen = mgBuf.readUInt32LE(mgOffsetsStart + 24)
-const flags = mgBuf.readUInt32LE(mgOffsetsStart + 28)
 
 console.log(`Module graph: trailer at ${trailerPosInMg}, offsets at ${mgOffsetsStart}`)
 console.log(`byte_count=${byteCount}, modules_ptr=(${modOff},${modLen}), entry_id=${entryId}`)

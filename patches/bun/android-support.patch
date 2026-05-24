@@ -853,12 +853,10 @@ index 267d1f8..dcc64b7 100644
              return null;
          }
  
-@@ -267,6 +269,16 @@ pub const StandaloneModuleGraph = struct {
+@@ -267,6 +269,11 @@ pub const StandaloneModuleGraph = struct {
          byte_count: usize = 0,
          modules_ptr: bun.StringPointer = .{},
          entry_point_id: u32 = 0,
-+        compile_exec_argv_ptr: bun.StringPointer = .{},
-+        flags: Flags = .{},
 +    };
 +
 +    pub const Flags = packed struct(u32) {
@@ -870,22 +868,15 @@ index 267d1f8..dcc64b7 100644
      };
  
      const trailer = "\n---- Bun! ----\n";
-@@ -310,6 +322,8 @@ pub const StandaloneModuleGraph = struct {
+@@ -310,6 +317,8 @@ pub const StandaloneModuleGraph = struct {
              .bytes = raw_bytes[0..offsets.byte_count],
              .files = modules,
              .entry_point_id = offsets.entry_point_id,
-+            .compile_exec_argv = sliceToZ(raw_bytes, offsets.compile_exec_argv_ptr),
-+            .flags = offsets.flags,
++            .compile_exec_argv = "",
++            .flags = .{},
          };
      }
  
-@@ -445,6 +459,8 @@ pub const StandaloneModuleGraph = struct {
-             .entry_point_id = @as(u32, @truncate(entry_point_id.?)),
-             .modules_ptr = string_builder.appendCount(std.mem.sliceAsBytes(modules.items)),
-             .byte_count = string_builder.len,
-+            .compile_exec_argv_ptr = .{},
-+            .flags = .{},
-         };
  
          _ = string_builder.append(std.mem.asBytes(&offsets));
 diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
