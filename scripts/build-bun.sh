@@ -20,7 +20,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
 
-echo "=== Building Bun v${BUN_VERSION} for Android aarch64 ==="
+# Debug mode: set DEBUG=1 to build with debug symbols and Zig safety checks
+DEBUG="${DEBUG:-}"
+BUILD_TYPE="${BUILD_TYPE:-Release}"
+if [ -n "$DEBUG" ]; then
+  BUILD_TYPE="RelWithDebInfo"
+  # Zig debug mode with safety checks
+  ZIG_DEBUG_FLAGS="-Doptimize=Debug"
+  echo "=== Building Bun v${BUN_VERSION} for Android aarch64 (DEBUG MODE) ==="
+else
+  ZIG_DEBUG_FLAGS=""
+  echo "=== Building Bun v${BUN_VERSION} for Android aarch64 ==="
+fi
 
 # Verify prerequisites
 if [ ! -d "$BUN_SRC" ]; then
@@ -72,11 +83,12 @@ cmake \
     -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$BUN_TOOLCHAIN" \
     -DANDROID_NDK_HOME="$ANDROID_NDK_HOME" \
-    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DENABLE_LTO=OFF \
     -DBUN_LINK_ONLY=OFF \
     -DWEBKIT_LOCAL=ON \
     -DWEBKIT_PATH="$WEBKIT_OUTPUT" \
+    $ZIG_DEBUG_FLAGS \
     "$BUN_SRC"
 
 echo ""

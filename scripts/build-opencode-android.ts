@@ -101,9 +101,54 @@ const migrations = await Promise.all(
 )
 console.log(`Loaded ${migrations.length} migrations`)
 
-// Step 3: Build with Bun.build() --compile for the HOST platform
+// Step 3: Inject CompressionStream polyfill
+// Bun v1.2.13 doesn't have native CompressionStream (added in v1.3.14+)
+console.log("\n=== Step 2.5: Injecting CompressionStream polyfill ===")
+
+const POLYFILL_SRC = path.resolve(import.meta.dir, "compression-polyfill.js")
+const POLYFILL_DST = path.join(OPENCODE_DIR, "src/compression-polyfill.js")
+const INDEX_SRC = path.join(OPENCODE_DIR, "src/index.ts")
+
+// Copy polyfill into source tree
+fs.copyFileSync(POLYFILL_SRC, POLYFILL_DST)
+
+// Prepend import to entry point
+const originalIndex = await Bun.file(INDEX_SRC).text()
+if (!originalIndex.includes('compression-polyfill')) {
+  await Bun.write(INDEX_SRC, `import "./compression-polyfill";\n${originalIndex}`)
+  console.log("  Injected polyfill import into src/index.ts")
+} else {
+  console.log("  Polyfill already injected")
+}
+
+// Register cleanup
+let cleanupDone = false
+async function cleanupPolyfill() {
+  if (cleanupDone) return
+  cleanupDone = true
+  try {
+    // Restore original index
+    const currentIndex = await Bun.file(INDEX_SRC).text()
+    if (currentIndex !== originalIndex) {
+      await Bun.write(INDEX_SRC, originalIndex)
+    }
+    // Remove polyfill file
+    if (fs.existsSync(POLYFILL_DST)) {
+      fs.unlinkSync(POLYFILL_DST)
+    }
+    console.log("  Cleaned up polyfill files")
+  } catch (e) {
+    console.error("  Cleanup warning:", e.message)
+  }
+}
+
+process.on("exit", cleanupPolyfill)
+process.on("SIGINT", () => { cleanupPolyfill().then(() => process.exit(1)) })
+process.on("SIGTERM", () => { cleanupPolyfill().then(() => process.exit(1)) })
+
+// Step 4: Build with Bun.build() --compile for the HOST platform
 // This creates a standalone binary for the host, from which we extract the module graph
-console.log("\n=== Step 3: Bundling OpenCode ===")
+console.log("\n=== Step 4: Bundling OpenCode ===")
 
 const plugin = createSolidTransformPlugin()
 
@@ -165,8 +210,8 @@ if (!result.success) {
 
 console.log(`Host standalone binary: ${hostBinaryPath}`)
 
-// Step 4: Extract module graph from host binary
-console.log("\n=== Step 4: Extracting module graph ===")
+// Step 5: Extract module graph from host binary
+console.log("\n=== Step 5: Extracting module graph ===")
 
 const hostBinary = await Bun.file(hostBinaryPath).arrayBuffer()
 const hostBytes = new Uint8Array(hostBinary)
@@ -230,8 +275,8 @@ const moduleGraphBytes = hostBytes.slice(hostBunSize, hostBytes.length - 8)
 console.log(`Module graph extracted: ${moduleGraphBytes.length} bytes`)
 console.log(`Trailer verified: OK`)
 
-// Step 5: Patch the module graph for Android
-console.log("\n=== Step 5: Patching module graph for Android ===")
+// Step 6: Patch the module graph for Android
+console.log("\n=== Step 6: Patching module graph for Android ===")
 
 // The module graph format (from StandaloneModuleGraph.zig):
 //   [string data: all file names, contents, sourcemaps, bytecodes concatenated]
@@ -315,8 +360,8 @@ if (undiciPatchCount === 0) {
 var finalModuleGraph = mgBuf.slice(0, trailerPosInMg + mgTrailerBuf.length)
 console.log(`Module graph size: ${finalModuleGraph.length} bytes (unchanged)`)
 
-// Step 6: Create Android standalone binary
-console.log("\n=== Step 6: Creating Android standalone binary ===")
+// Step 7: Create Android standalone binary
+console.log("\n=== Step 7: Creating Android standalone binary ===")
 
 const androidBunBytes = new Uint8Array(await Bun.file(ANDROID_BUN).arrayBuffer())
 const androidBunSize = androidBunBytes.length

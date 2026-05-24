@@ -11,6 +11,10 @@ on:
         description: 'Commit hash'
         required: false
         default: 'main'
+      debug:
+        description: 'Enable debug mode (debug symbols + Zig safety checks)'
+        required: false
+        default: 'false'
 
 env:
   BUN_VERSION: "1.2.13"
@@ -44,6 +48,10 @@ jobs:
       - name: Override OpenCode version from input
         if: github.event.inputs.opencode_version
         run: echo "OPENCODE_VERSION=${{ github.event.inputs.opencode_version }}" >> $GITHUB_ENV
+
+      - name: Enable debug mode
+        if: github.event.inputs.debug == 'true'
+        run: echo "DEBUG=1" >> $GITHUB_ENV
 
       - name: Create work directory
         run: |

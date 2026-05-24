@@ -15,6 +15,14 @@ source "$SCRIPT_DIR/env.sh"
 
 TOOLCHAIN="$REPO_ROOT/cmake/webkit-android-toolchain.cmake"
 
+# Debug mode: set DEBUG=1 to build with debug symbols
+DEBUG="${DEBUG:-}"
+WEBKIT_BUILD_TYPE="${WEBKIT_BUILD_TYPE:-Release}"
+if [ -n "$DEBUG" ]; then
+  WEBKIT_BUILD_TYPE="RelWithDebInfo"
+  echo "=== Building WebKit/JSC for Android aarch64 (DEBUG MODE) ==="
+fi
+
 # Compiler flags matching oven-sh/WebKit's Dockerfile
 DEFAULT_CFLAGS="-fno-omit-frame-pointer -ffunction-sections -fdata-sections -faddrsig -DU_STATIC_IMPLEMENTATION=1"
 RELEASE_FLAGS="-O3 -DNDEBUG=1"
@@ -54,7 +62,7 @@ cmake \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN_TMP" \
     -DPORT=JSCOnly \
     -DENABLE_STATIC_JSC=ON \
-    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_BUILD_TYPE="$WEBKIT_BUILD_TYPE" \
     -DUSE_THIN_ARCHIVES=OFF \
     -DUSE_BUN_JSC_ADDITIONS=ON \
     -DUSE_BUN_EVENT_LOOP=ON \
@@ -76,7 +84,7 @@ echo ""
 echo ">>> Configure complete. Building..."
 
 # Build JSC target
-cmake --build "$WEBKIT_BUILD" --config Release --target jsc -- -j"$JOBS"
+cmake --build "$WEBKIT_BUILD" --config "$WEBKIT_BUILD_TYPE" --target jsc -- -j"$JOBS"
 
 # Build private headers
 echo ">>> Building private headers..."
