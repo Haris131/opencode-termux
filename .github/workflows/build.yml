@@ -165,9 +165,11 @@ jobs:
           BUN_PATCH_HASH=$(sha256sum patches/bun/android-support.patch | cut -c1-16)
           WEBKIT_PATCH_HASH=$(sha256sum patches/webkit/android-support.patch | cut -c1-16)
           ZIG_PATCH_HASH=$(sha256sum patches/zig/posix-android-sigaction.patch | cut -c1-16)
+          BUILD_SCRIPT_HASH=$(sha256sum scripts/build-bun.sh | cut -c1-16)
           echo "bun_patch_hash=$BUN_PATCH_HASH" >> $GITHUB_OUTPUT
           echo "webkit_patch_hash=$WEBKIT_PATCH_HASH" >> $GITHUB_OUTPUT
           echo "zig_patch_hash=$ZIG_PATCH_HASH" >> $GITHUB_OUTPUT
+          echo "build_script_hash=$BUILD_SCRIPT_HASH" >> $GITHUB_OUTPUT
 
       - name: Cache ICU build
         id: cache-icu
@@ -188,7 +190,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.WORK_DIR }}/bun-build/bun
-          key: bun-android-${{ env.BUN_VERSION }}-${{ steps.hashes.outputs.bun_patch_hash }}-${{ steps.hashes.outputs.zig_patch_hash }}-debug${{ github.event.inputs.debug || 'false' }}
+          key: bun-android-v2-${{ env.BUN_VERSION }}-${{ steps.hashes.outputs.bun_patch_hash }}-${{ steps.hashes.outputs.zig_patch_hash }}-${{ steps.hashes.outputs.build_script_hash }}-debug${{ github.event.inputs.debug || 'false' }}
 
       # =============================================
       # Clone and patch sources
