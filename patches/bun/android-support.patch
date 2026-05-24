@@ -2226,4 +2226,26 @@ index 28ae78a..377744e 100644
 +                },
              };
          }
+diff --git a/src/install/install.zig b/src/install/install.zig
+index 2e17d63..6b237e5 100644
+--- a/src/install/install.zig
++++ b/src/install/install.zig
+@@ -1378,10 +1378,12 @@ pub const PackageInstall = NewPackageInstall(.regular);
+         var supported_method: Method = if (Environment.isMac)
+             Method.clonefile
++        else if (Environment.isAndroid)
++            Method.copyfile
+         else
+             Method.hardlink;
+ 
+          fn installWithClonefileEachDir(this: *@This(), destination_dir: std.fs.Dir) !Result {
+@@ -9605,10 +9607,12 @@ pub const PackageManager = struct {
+     const platform_specific_backend_label = if (Environment.isMac)
+         "Possible values: \"clonefile\" (default), \"hardlink\", \"symlink\", \"copyfile\""
++    else if (Environment.isAndroid)
++        "Possible values: \"copyfile\" (default), \"hardlink\", \"symlink\""
+     else
+         "Possible values: \"hardlink\" (default), \"symlink\", \"copyfile\"";
+ 
+     const shared_params = [_]ParamType{
  
