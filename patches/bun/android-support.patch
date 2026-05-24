@@ -851,9 +851,23 @@ index 267d1f8..dcc64b7 100644
 -        if (!isBunStandaloneFilePath(base_path)) {
 +        if (!isBunStandaloneFilePath(name)) {
              return null;
-         }
+        }
  
-@@ -267,6 +269,15 @@ pub const StandaloneModuleGraph = struct {
+@@ -92,9 +94,12 @@ pub const StandaloneModuleGraph = struct {
+     pub const CompiledModuleGraphFile = struct {
+         name: Schema.StringPointer = .{},
+         contents: Schema.StringPointer = .{},
+         sourcemap: Schema.StringPointer = .{},
+         bytecode: Schema.StringPointer = .{},
++        _pad1: Schema.StringPointer = .{},
++        _pad2: Schema.StringPointer = .{},
+         encoding: Encoding = .latin1,
+         loader: bun.options.Loader = .file,
+         module_format: ModuleFormat = .none,
++        _pad3: u8 = 0,
+     };
+ 
+@@ -267,6 +272,15 @@ pub const StandaloneModuleGraph = struct {
          byte_count: usize = 0,
          modules_ptr: bun.StringPointer = .{},
          entry_point_id: u32 = 0,
@@ -869,7 +883,7 @@ index 267d1f8..dcc64b7 100644
      };
  
      const trailer = "\n---- Bun! ----\n";
-@@ -310,6 +322,8 @@ pub const StandaloneModuleGraph = struct {
+@@ -310,6 +324,8 @@ pub const StandaloneModuleGraph = struct {
              .bytes = raw_bytes[0..offsets.byte_count],
              .files = modules,
              .entry_point_id = offsets.entry_point_id,
