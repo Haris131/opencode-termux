@@ -37,7 +37,7 @@ jobs:
       contents: write
     name: Build Android aarch64
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 hours for full build
+    timeout-minutes: 480  # 8 hours for full build
 
     steps:
       - name: Checkout repository
@@ -65,7 +65,11 @@ jobs:
       # =============================================
       - name: Install system packages
         run: |
-          sudo apt-get update
+          for i in 1 2 3; do
+            timeout 120 sudo apt-get update && break
+            echo "apt-get update attempt $i failed, retrying..."
+            sleep 5
+          done
           sudo apt-get install -y \
             ninja-build python3 ruby perl \
             git curl wget unzip xz-utils zip \
@@ -83,7 +87,7 @@ jobs:
           else
             echo "Installing CMake ${CMAKE_VER}..."
             cd /tmp
-            wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VER}/cmake-${CMAKE_VER}-linux-x86_64.tar.gz" -O cmake.tar.gz
+            timeout 120 wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VER}/cmake-${CMAKE_VER}-linux-x86_64.tar.gz" -O cmake.tar.gz
             sudo tar xzf cmake.tar.gz -C /opt/
             sudo ln -sf "/opt/cmake-${CMAKE_VER}-linux-x86_64/bin/cmake" /usr/local/bin/cmake
             sudo ln -sf "/opt/cmake-${CMAKE_VER}-linux-x86_64/bin/ctest" /usr/local/bin/ctest
