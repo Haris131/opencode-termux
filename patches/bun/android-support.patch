@@ -832,7 +832,7 @@ index 8f97d4f..b24e559 100644
  
      // kill self
 diff --git a/src/StandaloneModuleGraph.zig b/src/StandaloneModuleGraph.zig
-index 267d1f8..dcc64b7 100644
+index 267d1f8..b73e6ff 100644
 --- a/src/StandaloneModuleGraph.zig
 +++ b/src/StandaloneModuleGraph.zig
 @@ -19,6 +19,8 @@ pub const StandaloneModuleGraph = struct {
@@ -841,21 +841,19 @@ index 267d1f8..dcc64b7 100644
      entry_point_id: u32 = 0,
 +    compile_exec_argv: []const u8 = "",
 +    flags: Flags = .{},
- 
+
      // We never want to hit the filesystem for these files
      // We use the `/$bunfs/` prefix to indicate that it's a virtual path
 @@ -67,7 +69,7 @@ pub const StandaloneModuleGraph = struct {
- 
+
      // by normalized file path
      pub fn find(this: *const StandaloneModuleGraph, name: []const u8) ?*File {
 -        if (!isBunStandaloneFilePath(base_path)) {
 +        if (!isBunStandaloneFilePath(name)) {
              return null;
-        }
- 
-@@ -92,9 +94,12 @@ pub const StandaloneModuleGraph = struct {
-     pub const CompiledModuleGraphFile = struct {
-         name: Schema.StringPointer = .{},
+         }
+
+@@ -94,9 +96,12 @@ pub const StandaloneModuleGraph = struct {
          contents: Schema.StringPointer = .{},
          sourcemap: Schema.StringPointer = .{},
          bytecode: Schema.StringPointer = .{},
@@ -866,7 +864,8 @@ index 267d1f8..dcc64b7 100644
          module_format: ModuleFormat = .none,
 +        _pad3: u8 = 0,
      };
- 
+
+     pub const Encoding = enum(u8) {
 @@ -267,6 +272,15 @@ pub const StandaloneModuleGraph = struct {
          byte_count: usize = 0,
          modules_ptr: bun.StringPointer = .{},
@@ -881,7 +880,7 @@ index 267d1f8..dcc64b7 100644
 +        disable_autoload_package_json: bool = false,
 +        _padding: u28 = 0,
      };
- 
+
      const trailer = "\n---- Bun! ----\n";
 @@ -310,6 +324,8 @@ pub const StandaloneModuleGraph = struct {
              .bytes = raw_bytes[0..offsets.byte_count],
