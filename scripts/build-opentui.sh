@@ -56,7 +56,7 @@ cd "$OPENTUI_ZIG_DIR"
 
 "$ZIG_BIN" build \
     -Dtarget=aarch64-linux-android \
-    -Doptimize=ReleaseSafe \
+    -Doptimize=ReleaseFast \
     --prefix . 2>&1
 
 # The build.zig installs to dest_dir="../lib/{output_name}" relative to
