@@ -331,9 +331,9 @@ console.log("\n=== Step 6: Patching module graph for Android ===")
 // @sizeOf(Offsets) = 32 for v1.3.2 (extern struct + trailing padding)
 // @sizeOf(Offsets) = 24 for v1.2.13 (without compile_exec_argv_ptr)
 //
-// NOTE: CompiledModuleGraphFile layout varies between Bun versions:
+// NOTE: CompiledModuleGraphFile layout is 36 bytes in both Bun versions:
 //   - Bun 1.2.x: 36 bytes (4 StringPointers + 3 u8 + 1 padding)
-//   - Bun 1.3.x: 52 bytes (6 StringPointers + 4 u8)
+//   - Bun 1.3.x: 36 bytes (4 StringPointers + 4 u8, no padding needed)
 // We avoid parsing individual modules. The undici patch is a same-size
 // in-place byte replacement in the raw string data, so we don't need to
 // know the module struct layout at all. The module list and offsets are
