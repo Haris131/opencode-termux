@@ -120,6 +120,82 @@ With warm caches (WebKit + Bun cached), CI runs complete in ~4 minutes.
 
 ---
 
+## Recent Fixes & Improvements
+
+This section documents the fixes applied on top of the original `guysoft/opencode-termux` port to make OpenCode stable and crash-free on Termux/Android.
+
+### Critical: OOM on startup (Module graph stride mismatch)
+
+**Root cause**: `CompiledModuleGraphFile` is 36 bytes in **both** Bun v1.2.13 (target) and v1.3.2 (host). The original patch added `_pad1`/`_pad2`/`_pad3` fields that bloated the Zig struct to 52 bytes, causing `bytesAsSlice()` to read module entries at 52-byte stride while the host wrote them at 36-byte stride. This produced garbage `StringPointer` values → huge allocations → RSS jumped to 1GB+ → OOM killed by Android kernel.
+
+**Fix**: Removed the bogus padding fields. The struct now matches the native 36-byte layout of both Bun versions. The `Offsets` struct was extended to 32 bytes (adding `compile_exec_argv_ptr`) to match the host v1.3.2 header format — this is the only real structural difference between v1.2.13 and v1.3.2 module graph headers.
+
+### Critical: OpenTUI `@intCast` panic in streaming renderer
+
+**Root cause**: OpenTUI's `renderer.zig` casts `cell.attributes` (a `u32` containing 8 base attribute bits + 24-bit link_id) to `i32` via `@as(i32, @intCast(...))`. In `ReleaseSafe` mode, Zig's runtime safety checks panic when the value exceeds `INT32_MAX`. This occurred during streaming TUI output when TUI_TARGET set to `basic`.
+
+**Fix**: Build `libopentui.so` with Zig `ReleaseFast` optimization mode (commit `b2a594c`), which removes runtime safety checks from OpenTUI. This is a pragmatic fix over patching upstream OpenTUI source.
+
+### Critical: Module graph Offsets struct size
+
+The module graph header (`Offsets`) written by the host Bun v1.3.2 is 32 bytes:
+- `byte_count: u64` (8)
+- `modules_ptr: StringPointer` (8)
+- `entry_point_id: u32` (4)
+- `compile_exec_argv_ptr: StringPointer` (8)
+- padding (4, for 8-byte alignment)
+
+The extraction script (`build-opencode-android.ts`) must use `OFFSETS_SIZE = 32` to locate `total_byte_count` at the correct offset from the trailer. Earlier attempts used 20 bytes (matching v1.2.13 source) and 28 bytes (forgetting trailing padding), both causing the footer to be misread.
+
+### Debug build fixes
+
+`CMAKE_BUILD_TYPE=Debug` adds `-O0` + `-fsanitize` flags that break C++ cross-compilation (template expansion failures with `-O0`). The correct configuration is:
+- `CMAKE_BUILD_TYPE=RelWithDebInfo` (for C/C++: `-O2 -g`)
+- `-DZIG_OPTIMIZE=Debug` (forces Zig optimization to Debug independently)
+
+### CI workflow reliability
+
+- `apt-get update` wrapped in `timeout 120` retry loop (3 attempts) to handle network flakiness
+- Job timeout increased from default to 480 minutes
+- Debug/release build flags included in GitHub Actions cache keys so debug and release builds use separate caches
+
+### CompressionStream polyfill for Bun v1.2.13
+
+Bun v1.2.13 lacks native `CompressionStream` API (added in Bun v1.3.x). OpenCode uses `CompressionStream` for WebSocket compression. Added `scripts/compression-polyfill.js` using `node:zlib` sync APIs (`createDeflateRaw`/`createInflateRaw`), injected into the OpenCode bundle before compilation.
+
+### Install backend: copyfile instead of hardlink
+
+Termux mounts filesystems via FUSE, which doesn't support hardlinks between certain paths. Changed default install backend from `hardlink` to `copyfile` on Android to avoid `EXDEV` (cross-device link) errors when running `bun install` or `npm install`.
+
+### $TMPDIR respect on Android/Termux
+
+`platformTempDir()` in `src/fs.zig` previously skipped `$TMPDIR`/`$TMP` environment variable checks on Android because `Environment.isLinux` is `false` (Android uses `.android` ABI). Added `Environment.isAndroid` check so Termux's `$TMPDIR` is respected instead of falling back to unwritable `/tmp/`. Also fixed `ModuleLoader.zig` which hardcoded `/tmp/bun-debug-src/` for non-Windows.
+
+### EACCES directory handling in resolver
+
+On Android/Termux, directories like `/` (root) and certain FUSE mount points may be inaccessible (EACCES) for directory listing. The resolver needed multiple iterations to handle this:
+
+1. Skip root path errors via labeled block (`root_handle:`) with `break`
+2. Skip EACCES during queue processing via `markNotFound` + `continue`
+3. Work around Zig codegen bugs: `continue` inside `else |err| switch` triggers a Zig compiler crash. Workaround: use `else |err| { if chain }` pattern and extract `should_skip` outside the `if/else` block
+4. Final approach: `access()` check before `open_dir` to avoid the error entirely
+
+### Zig 0.15 compatibility
+
+Bun v1.2.13 uses a custom Zig 0.14 fork (oven-sh/zig). The OpenTUI build uses standalone Zig 0.15.2, which changed `@truncate` syntax:
+- Zig 0.14: `@truncate(u32, value)` (two args)
+- Zig 0.15: `@as(u32, @truncate(value))` (single arg) or `@intCast`
+
+Updated `uws.zig` and `socket.zig` intCast/truncate calls for Zig 0.15.2 compatibility.
+
+### Patch system improvements
+
+- Added `git clean -fd` before re-applying patches to remove stale build artifacts
+- Regenerated `StandaloneModuleGraph.zig` hunk with correct context boundaries (indentation match)
+- Split patch into proper hunks with matching source context lines
+
+---
+
 ## What Was Patched and Why
 
 ### Bun Patches (35 files modified, 4 new files)
@@ -215,13 +291,15 @@ The standalone binary format:
 
 ### Why host Bun must be pinned to v1.3.2
 
-The `CompiledModuleGraphFile` struct layout changed between Bun versions:
-- **Bun <= 1.3.2**: 36-byte stride (4 StringPointers + 3 u8 + 1 padding)
-- **Bun >= 1.3.11**: 52-byte stride (6 StringPointers + 4 u8)
+The `CompiledModuleGraphFile` entry size is **36 bytes in both Bund v1.2.13 and v1.3.2**:
+- **v1.2.13**: 4 StringPointers + 3 u8 = 35 bytes, padded to 36
+- **v1.3.2**: 4 StringPointers + 4 u8 = 36 bytes (added `side` field in existing padding)
 
-The target Android Bun is v1.2.13, which expects 36-byte stride. If the host Bun produces 52-byte modules, the target reads garbage and OOMs immediately (RSS jumps to 1GB on startup).
+The original `guysoft/opencode-termux` patch incorrectly added `_pad1`/`_pad2`/`_pad3` fields (bloating to 52 bytes), causing the OOM crash. Once the bogus padding is removed, both versions use the same stride and module graph transplantation works correctly.
 
-We can't use Bun 1.2.13 as host either, because OpenCode's monorepo uses `catalog:` workspace protocol (added in Bun 1.3.x) -- `bun install` fails. **Bun 1.3.2 is the sweet spot**: supports `catalog:` AND produces compatible 36-byte modules.
+We can't use Bun 1.2.13 as host because OpenCode's monorepo uses `catalog:` workspace protocol (added in Bun 1.3.x) — `bun install` fails. **Bun 1.3.2 is the sweet spot**: supports `catalog:` AND produces compatible 36-byte module entries.
+
+**Important**: The `Offsets` struct header **did** change between versions — v1.3.2 added `compile_exec_argv_ptr` making it 32 bytes vs. 20 bytes in v1.2.13. Since the host Bun writes the header, the target must read it with the v1.3.2 layout (`OFFSETS_SIZE = 32`).
 
 ---
 
@@ -232,6 +310,21 @@ We can't use Bun 1.2.13 as host either, because OpenCode's monorepo uses `catalo
 - All backend services (server, provider, file watcher, LSP)
 - `opencode --version` outputs correct version
 - AI provider connections (tested with Claude, GitHub Copilot)
+- No crashes, panics, or OOM on startup or during normal operation
+
+### Resolved Issues
+
+| Issue | Fix |
+|-------|-----|
+| OOM on startup (1GB RSS, killed by kernel) | Removed bogus `_pad1`/`_pad2`/`_pad3` padding from `CompiledModuleGraphFile` — struct is 36 bytes in both Bun versions, not 52 |
+| `@intCast` panic in TUI renderer | Built `libopentui.so` with `ReleaseFast` instead of `ReleaseSafe` |
+| Module graph parse failure | Fixed `Offsets` struct size to 32 bytes (matching host v1.3.2 header format) |
+| Debug build failure | Use `RelWithDebInfo` + `-DZIG_OPTIMIZE=Debug` instead of `CMAKE_BUILD_TYPE=Debug` |
+| `CompressionStream` is not defined | Added polyfill via `node:zlib` sync APIs |
+| Hardlink `EXDEV` on `bun install` | Default Android install backend changed to `copyfile` |
+| Read-only filesystem errors | Respect `$TMPDIR` instead of hardcoded `/tmp/` |
+| EACCES directory scanner crashes | Multiple resolver fixes for inaccessible directories on Termux |
+| Zig 0.15 `@truncate` compile errors | Updated syntax for Zig 0.15.2 |
 
 ### Not working / degraded
 
@@ -254,6 +347,8 @@ We can't use Bun 1.2.13 as host either, because OpenCode's monorepo uses `catalo
 | Raw `rt_sigaction`/`rt_sigprocmask` syscalls | Zig's struct layout doesn't match Bionic's; bypass libc entirely |
 | NDK `libc.so` stub linked into `libopentui.so` | Zig doesn't provision Android libc; explicit link needed for `dlopen` symbol resolution |
 | Module graph extracted via trailer, not `process.execPath` | `process.execPath` is unreliable in CI; trailer-based extraction is version-agnostic |
+| OpenTUI built with `ReleaseFast` | Avoids `u32→i32` @intCast safety panic in renderer when attribute values exceed INT32_MAX |
+| `OFFSETS_SIZE = 32` in extraction script | Host Bun v1.3.2 writes 32-byte Offsets header; must match for correct module graph parsing |
 
 ---
 
