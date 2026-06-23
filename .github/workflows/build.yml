@@ -8,9 +8,9 @@ on:
         required: false
         default: '1.17.9'
       commit_sha:
-        description: 'Commit hash'
+        description: 'Commit hash or branch name'
         required: false
-        default: 'main'
+        default: 'dev'
       debug:
         description: 'Enable debug mode (debug symbols + Zig safety checks)'
         required: false
