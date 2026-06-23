@@ -60,11 +60,11 @@ HOST_BUN="${HOST_BUN:-bun}"
 
 # WebKit: use prebuilt tarballs (downloads automatically).
 # For Android, the build system handles cross-compilation WebKit prebuilts.
+# NDK path and API level are auto-detected from env vars (ANDROID_NDK_HOME, etc.)
+# by the build system's detectAndroidNdk() function.
 "$HOST_BUN" run build \
     $BUILD_FLAGS \
     --abi=android \
-    --android-ndk="$ANDROID_NDK_HOME" \
-    --android-api-level="$ANDROID_API" \
     --configure-only \
     --webkit=prebuilt \
     2>&1
