@@ -1,9 +1,7 @@
 --- a/vendor/zig/lib/std/posix.zig
 +++ b/vendor/zig/lib/std/posix.zig
-@@ -5894,27 +5894,43 @@
-     return system.sigismember(set, sig);
- }
- 
+@@ -5896,22 +5896,45 @@
+
  /// Examine and change a signal action.
  pub fn sigaction(sig: u8, noalias act: ?*const Sigaction, noalias oact: ?*Sigaction) void {
 -    switch (errno(system.sigaction(sig, act, oact))) {
@@ -34,7 +32,7 @@
 +        }
      }
  }
- 
+
  /// Sets the thread signal mask.
  pub fn sigprocmask(flags: u32, noalias set: ?*const sigset_t, noalias oldset: ?*sigset_t) void {
 -    switch (errno(system.sigprocmask(@bitCast(flags), set, oldset))) {
@@ -59,5 +57,3 @@
 +        }
      }
  }
- 
- pub const FutimensError = error{
