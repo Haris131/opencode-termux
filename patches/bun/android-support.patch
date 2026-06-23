@@ -383,7 +383,7 @@ index cb2762f..9c5cf6f 100644
              );
              if (lim.cur < target) {
 diff --git a/src/workaround_missing_symbols.zig b/src/workaround_missing_symbols.zig
-index 813670e..c83b48c 100644
+index 813670e..d2aa2f1 100644
 --- a/src/workaround_missing_symbols.zig
 +++ b/src/workaround_missing_symbols.zig
 @@ -1,4 +1,24 @@
@@ -397,15 +397,15 @@ index 813670e..c83b48c 100644
 +    pub const memmem = bun.c.memmem;
 +
 +    pub const lstat = blk: {
-+        const T = *const fn ([*:0]const u8, *std.os.linux.Stat) callconv(.C) c_int;
++        const T = *const fn ([*:0]const u8, *std.os.linux.Stat) callconv(.c) c_int;
 +        break :blk @extern(T, .{ .name = "lstat" });
 +    };
 +    pub const fstat = blk: {
-+        const T = *const fn (c_int, *std.os.linux.Stat) callconv(.C) c_int;
++        const T = *const fn (c_int, *std.os.linux.Stat) callconv(.c) c_int;
 +        break :blk @extern(T, .{ .name = "fstat" });
 +    };
 +    pub const stat = blk: {
-+        const T = *const fn ([*:0]const u8, *std.os.linux.Stat) callconv(.C) c_int;
++        const T = *const fn ([*:0]const u8, *std.os.linux.Stat) callconv(.c) c_int;
 +        break :blk @extern(T, .{ .name = "stat" });
 +    };
 +} else struct {
