@@ -1,9 +1,11 @@
 --- a/vendor/zig/lib/std/posix.zig
 +++ b/vendor/zig/lib/std/posix.zig
-@@ -5787,23 +5787,45 @@
+@@ -5894,27 +5894,43 @@
+     return system.sigismember(set, sig);
+ }
  
  /// Examine and change a signal action.
- pub fn sigaction(sig: u6, noalias act: ?*const Sigaction, noalias oact: ?*Sigaction) void {
+ pub fn sigaction(sig: u8, noalias act: ?*const Sigaction, noalias oact: ?*Sigaction) void {
 -    switch (errno(system.sigaction(sig, act, oact))) {
 -        .SUCCESS => return,
 -        // EINVAL means the signal is either invalid or some signal that cannot have its action
@@ -58,3 +60,4 @@
      }
  }
  
+ pub const FutimensError = error{
