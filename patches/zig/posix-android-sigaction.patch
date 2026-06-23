@@ -1,5 +1,5 @@
---- a/vendor/zig/lib/std/posix.zig	2026-06-23 14:57:44.495138082 +0700
-+++ b/vendor/zig/lib/std/posix.zig	2026-06-23 14:58:50.907138086 +0700
+--- a/vendor/zig/lib/std/posix.zig	2026-06-23 17:43:35.638326893 +0700
++++ b/vendor/zig/lib/std/posix.zig	2026-06-23 17:43:35.706326893 +0700
 @@ -5896,23 +5896,45 @@
  
  /// Examine and change a signal action.
@@ -17,7 +17,7 @@
 +    // the raw rt_sigaction syscall which correctly handles the conversion
 +    // from Sigaction to the kernel's k_sigaction struct.
 +    if (comptime builtin.abi.isAndroid()) {
-+        switch (E.init(linux.sigaction(sig, act, oact))) {
++        switch (E.init(linux.sigaction(sig, @ptrCast(act), @ptrCast(oact)))) {
 +            .SUCCESS => return,
 +            else => unreachable,
 +        }
@@ -44,7 +44,7 @@
 +    // but Zig's linux.sigset_t is 128 bytes. Bypass libc and use the raw
 +    // rt_sigprocmask syscall directly.
 +    if (comptime builtin.abi.isAndroid()) {
-+        switch (E.init(linux.sigprocmask(flags, set, oldset))) {
++        switch (E.init(linux.sigprocmask(flags, @ptrCast(set), @ptrCast(oldset)))) {
 +            .SUCCESS => return,
 +            else => unreachable,
 +        }
