@@ -12,7 +12,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
 
-ZIG_BIN="${ZIG_BIN:-zig}"
+# Use Bun's vendored Zig if available, otherwise fall back to PATH
+if [ -z "${ZIG_BIN:-}" ] && [ -f "$BUN_SRC/vendor/zig/zig" ]; then
+  ZIG_BIN="$BUN_SRC/vendor/zig/zig"
+elif [ -z "${ZIG_BIN:-}" ]; then
+  ZIG_BIN="zig"
+fi
 
 echo "=== Building libopentui.so for Android aarch64 ==="
 
