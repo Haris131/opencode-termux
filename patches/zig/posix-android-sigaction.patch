@@ -1,6 +1,6 @@
---- a/vendor/zig/lib/std/posix.zig
-+++ b/vendor/zig/lib/std/posix.zig
-@@ -5896,22 +5896,45 @@
+--- a/vendor/zig/lib/std/posix.zig	2026-06-23 14:57:44.495138082 +0700
++++ b/vendor/zig/lib/std/posix.zig	2026-06-23 14:58:50.907138086 +0700
+@@ -5896,23 +5896,45 @@
  
  /// Examine and change a signal action.
  pub fn sigaction(sig: u8, noalias act: ?*const Sigaction, noalias oact: ?*Sigaction) void {
@@ -57,4 +57,4 @@
 +        }
      }
  }
-
+ 
