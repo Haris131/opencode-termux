@@ -65,6 +65,7 @@ HOST_BUN="${HOST_BUN:-bun}"
 "$HOST_BUN" run build \
     $BUILD_FLAGS \
     --abi=android \
+    --arch=aarch64 \
     --configure-only \
     --webkit=prebuilt \
     2>&1

@@ -11,6 +11,144 @@ index 69ef753..85d48a1 100644
              if (socket_dir_fd == -1) {
                  errno = ENAMETOOLONG;
                  return LIBUS_SOCKET_ERROR;
+diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
+new file mode 100644
+index 0000000..5fdd859
+--- /dev/null
++++ b/src/android_disable_tags.c
+@@ -0,0 +1,62 @@
++#if defined(__ANDROID__) && defined(__aarch64__)
++
++#include <stdint.h>
++#include <stdio.h>
++#include <sys/prctl.h>
++
++#ifndef PR_SET_TAGGED_ADDR_CTRL
++#define PR_SET_TAGGED_ADDR_CTRL 55
++#endif
++
++#ifndef PR_TAGGED_ADDR_ENABLE
++#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
++#endif
++
++#ifndef PR_MTE_TCF_NONE
++#define PR_MTE_TCF_NONE 0UL
++#endif
++
++#ifndef PR_MTE_TAG_MASK
++#define PR_MTE_TAG_MASK 0xffffUL
++#endif
++
++#ifndef PAC_SIGNATURE_MASK
++#define PAC_SIGNATURE_MASK 0xffff000000000000UL
++#endif
++
++static void disable_tagged_addresses(void) {
++    // Disable ARM64 Top-Byte-Ignore (TBI) / pointer tagging.
++    // Android 11+ enables TBI by default for app processes, which means
++    // the kernel ignores the top byte of the address in syscalls. Bun's
++    // JSC (JavaScriptCore) uses pointer tagging internally with JSCell
++    // header bits in the top byte. If TBI is enabled, the kernel strips
++    // those bits, causing JSC to misinterpret cell types and crash.
++    //
++    // PR_SET_TAGGED_ADDR_CTRL with PR_TAGGED_ADDR_ENABLE=0 disables TBI.
++    // This is a per-process setting inherited by child threads.
++    prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++}
++
++static void disable_heap_tagging(void) {
++    // Disable Android's Memory Tagging Extension (MTE) if enabled.
++    // MTE stores a 4-bit tag in the top byte of each pointer and checks
++    // it on every load/store. This conflicts with JSC's pointer tagging
++    // scheme. Disable MTE early before JSC allocates any memory.
++    //
++    // PR_SET_TAGGED_ADDR_CTRL with PR_MTE_TCF_NONE disables MTE.
++    // We don't use PR_TAGGED_ADDR_ENABLE here because the kernel may
++    // have already enabled TBI by default; we just need MTE off.
++    prctl(PR_SET_TAGGED_ADDR_CTRL,
++          PR_MTE_TCF_NONE,
++          0,
++          PR_MTE_TAG_MASK,
++          0);
++}
++
++__attribute__((constructor))
++static void android_init(void) {
++    disable_tagged_addresses();
++    disable_heap_tagging();
++}
++
++#endif /* __ANDROID__ && __aarch64__ */
+diff --git a/src/android_tls_align.c b/src/android_tls_align.c
+new file mode 100644
+index 0000000..f801b82
+--- /dev/null
++++ b/src/android_tls_align.c
+@@ -0,0 +1,31 @@
++/**
++ * Android TLS alignment shim.
++ *
++ * On ARM64, Android's Bionic dynamic linker requires the ELF TLS segment
++ * to have p_align >= 64 bytes (to reserve 8 TCB slots before the TLS data).
++ * The Zig linker emits p_align based on the maximum alignment of all TLS
++ * variables, which defaults to 8 for Zig threadlocal variables.
++ *
++ * This file provides a dummy __thread variable with alignment 64, which
++ * forces the linker (lld) to:
++ *   1. Set PT_TLS p_align = 64
++ *   2. Compute tp_offset = round_up(2*sizeof(void*), 64) = 64
++ *   3. Resolve all R_AARCH64_TLSLE_ADD_TPREL relocations with tp_offset=64
++ *
++ * Without this, the Zig linker would emit p_align=8, lld would compute
++ * tp_offset=16, and all TLS accesses would collide with Bionic's TCB slots,
++ * corrupting critical runtime state (DTV, thread_id, scudo allocator, etc.).
++ *
++ * This file MUST be compiled with the Android NDK and linked into the final
++ * binary alongside the Zig object file.
++ */
++
++#if defined(__ANDROID__) && defined(__aarch64__)
++__attribute__((aligned(64)))
++static __thread char _android_tls_align_dummy[64];
++
++/* Prevent the compiler from optimizing away the variable */
++void *_android_tls_align_anchor(void) {
++    return (void *)_android_tls_align_dummy;
++}
++#endif
+diff --git a/src/android_tls_align.s b/src/android_tls_align.s
+new file mode 100644
+index 0000000..6ea310b
+--- /dev/null
++++ b/src/android_tls_align.s
+@@ -0,0 +1,27 @@
++// Android TLS alignment fix for ARM64 Bionic.
++//
++// Android's Bionic dynamic linker (API 31+/Android 12+) requires the
++// PT_TLS segment to have p_align >= 64 bytes. This is because Bionic's
++// Thread Control Block (TCB) uses slots at TPIDR+0..TPIDR+63, and the
++// TLS segment starts at round_up(sizeof(tcb_head), p_align).
++//
++// With p_align=8, the TLS segment starts at TPIDR+16, stomping on
++// Bionic's TCB slots (including scudo allocator state). With p_align=64,
++// TLS starts at TPIDR+64, leaving all TCB slots intact.
++//
++// The Zig linker emits p_align=8 for .tbss. This assembly file creates
++// a .tbss section with explicit 64-byte alignment, which forces lld to
++// compute max(all TLS section alignments) = 64, producing p_align=64
++// in the PT_TLS program header.
++//
++// This MUST be assembled (not compiled as C) to avoid NDK's emulated
++// TLS (__emutls) which would produce no real .tbss section at all.
++
++.section .tbss,"awT",@nobits
++.balign 64
++.global _android_tls_align_force
++.hidden _android_tls_align_force
++.type _android_tls_align_force,@tls_object
++.size _android_tls_align_force,64
++_android_tls_align_force:
++.zero 64
 diff --git a/src/install/PackageInstall.zig b/src/install/PackageInstall.zig
 index 2175244..2fde724 100644
 --- a/src/install/PackageInstall.zig
@@ -245,7 +383,7 @@ index cb2762f..9c5cf6f 100644
              );
              if (lim.cur < target) {
 diff --git a/src/workaround_missing_symbols.zig b/src/workaround_missing_symbols.zig
-index 813670e..a31a13f 100644
+index 813670e..c83b48c 100644
 --- a/src/workaround_missing_symbols.zig
 +++ b/src/workaround_missing_symbols.zig
 @@ -1,4 +1,24 @@
@@ -274,141 +412,10 @@ index 813670e..a31a13f 100644
  
      // On linux, bun overrides the libc symbols for various functions.
      // This is to compensate for older glibc versions.
-diff --git a/src/android_disable_tags.c b/src/android_disable_tags.c
-new file mode 100644
-index 0000000..5fdd859
---- /dev/null
-+++ b/src/android_disable_tags.c
-@@ -0,0 +1,62 @@
-+#if defined(__ANDROID__) && defined(__aarch64__)
-+
-+#include <stdint.h>
-+#include <stdio.h>
-+#include <sys/prctl.h>
-+
-+#ifndef PR_SET_TAGGED_ADDR_CTRL
-+#define PR_SET_TAGGED_ADDR_CTRL 55
-+#endif
-+
-+#ifndef PR_TAGGED_ADDR_ENABLE
-+#define PR_TAGGED_ADDR_ENABLE (1UL << 0)
-+#endif
-+
-+#ifndef PR_MTE_TCF_NONE
-+#define PR_MTE_TCF_NONE 0UL
-+#endif
-+
-+#ifndef PR_MTE_TAG_MASK
-+#define PR_MTE_TAG_MASK 0xffffUL
-+#endif
-+
-+#ifndef PAC_SIGNATURE_MASK
-+#define PAC_SIGNATURE_MASK 0xffff000000000000UL
-+#endif
-+
-+static void disable_tagged_addresses(void) {
-+    // Disable ARM64 Top-Byte-Ignore (TBI) / pointer tagging.
-+    // Android 11+ enables TBI by default for app processes, which means
-+    // the kernel ignores the top byte of the address in syscalls. Bun's
-+    // JSC (JavaScriptCore) uses pointer tagging internally with JSCell
-+    // header bits in the top byte. If TBI is enabled, the kernel strips
-+    // those bits, causing JSC to misinterpret cell types and crash.
-+    //
-+    // PR_SET_TAGGED_ADDR_CTRL with PR_TAGGED_ADDR_ENABLE=0 disables TBI.
-+    // This is a per-process setting inherited by child threads.
-+    prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
-+}
-+
-+static void disable_heap_tagging(void) {
-+    // Disable Android's Memory Tagging Extension (MTE) if enabled.
-+    // MTE stores a 4-bit tag in the top byte of each pointer and checks
-+    // it on every load/store. This conflicts with JSC's pointer tagging
-+    // scheme. Disable MTE early before JSC allocates any memory.
-+    //
-+    // PR_SET_TAGGED_ADDR_CTRL with PR_MTE_TCF_NONE disables MTE.
-+    // We don't use PR_TAGGED_ADDR_ENABLE here because the kernel may
-+    // have already enabled TBI by default; we just need MTE off.
-+    prctl(PR_SET_TAGGED_ADDR_CTRL,
-+          PR_MTE_TCF_NONE,
-+          0,
-+          PR_MTE_TAG_MASK,
-+          0);
-+}
-+
-+__attribute__((constructor))
-+static void android_init(void) {
-+    disable_tagged_addresses();
-+    disable_heap_tagging();
-+}
-+
-+#endif /* __ANDROID__ && __aarch64__ */
-diff --git a/src/android_tls_align.c b/src/android_tls_align.c
-new file mode 100644
-index 0000000..f801b82
---- /dev/null
-+++ b/src/android_tls_align.c
-@@ -0,0 +1,31 @@
-+/**
-+ * Android TLS alignment shim.
-+ *
-+ * On ARM64, Android's Bionic dynamic linker requires the ELF TLS segment
-+ * to have p_align >= 64 bytes (to reserve 8 TCB slots before the TLS data).
-+ * The Zig linker emits p_align based on the maximum alignment of all TLS
-+ * variables, which defaults to 8 for Zig threadlocal variables.
-+ *
-+ * This file provides a dummy __thread variable with alignment 64, which
-+ * forces the linker (lld) to:
-+ *   1. Set PT_TLS p_align = 64
-+ *   2. Compute tp_offset = round_up(2*sizeof(void*), 64) = 64
-+ *   3. Resolve all R_AARCH64_TLSLE_ADD_TPREL relocations with tp_offset=64
-+ *
-+ * Without this, the Zig linker would emit p_align=8, lld would compute
-+ * tp_offset=16, and all TLS accesses would collide with Bionic's TCB slots,
-+ * corrupting critical runtime state (DTV, thread_id, scudo allocator, etc.).
-+ *
-+ * This file MUST be compiled with the Android NDK and linked into the final
-+ * binary alongside the Zig object file.
-+ */
-+
-+#if defined(__ANDROID__) && defined(__aarch64__)
-+__attribute__((aligned(64)))
-+static __thread char _android_tls_align_dummy[64];
-+
-+/* Prevent the compiler from optimizing away the variable */
-+void *_android_tls_align_anchor(void) {
-+    return (void *)_android_tls_align_dummy;
-+}
-+#endif
-diff --git a/src/android_tls_align.s b/src/android_tls_align.s
-new file mode 100644
-index 0000000..6ea310b
---- /dev/null
-+++ b/src/android_tls_align.s
-@@ -0,0 +1,27 @@
-+// Android TLS alignment fix for ARM64 Bionic.
-+//
-+// Android's Bionic dynamic linker (API 31+/Android 12+) requires the
-+// PT_TLS segment to have p_align >= 64 bytes. This is because Bionic's
-+// Thread Control Block (TCB) uses slots at TPIDR+0..TPIDR+63, and the
-+// TLS segment starts at round_up(sizeof(tcb_head), p_align).
-+//
-+// With p_align=8, the TLS segment starts at TPIDR+16, stomping on
-+// Bionic's TCB slots (including scudo allocator state). With p_align=64,
-+// TLS starts at TPIDR+64, leaving all TCB slots intact.
-+//
-+// The Zig linker emits p_align=8 for .tbss. This assembly file creates
-+// a .tbss section with explicit 64-byte alignment, which forces lld to
-+// compute max(all TLS section alignments) = 64, producing p_align=64
-+// in the PT_TLS program header.
-+//
-+// This MUST be assembled (not compiled as C) to avoid NDK's emulated
-+// TLS (__emutls) which would produce no real .tbss section at all.
-+
-+.section .tbss,"awT",@nobits
-+.balign 64
-+.global _android_tls_align_force
-+.hidden _android_tls_align_force
-+.type _android_tls_align_force,@tls_object
-+.size _android_tls_align_force,64
-+_android_tls_align_force:
-+.zero 64
+@@ -131,6 +151,3 @@ pub const current = switch (bun.Environment.os) {
+     .freebsd => freebsd,
+     .wasm => struct {},
+ };
+-
+-const bun = @import("bun");
+-const std = @import("std");
