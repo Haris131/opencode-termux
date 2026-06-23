@@ -137,6 +137,13 @@ jobs:
           sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libunwind.a" \
             "${FLAT_DIR}/aarch64/libunwind.a"
           echo "Android compiler-rt symlinks created in LLVM 21 resource dir"
+          # Also ensure strip can handle Android ELF binaries.
+          # System GNU strip can't recognise Android aarch64 format.
+          NDK_LLVM_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          if [ -x "$NDK_LLVM_STRIP" ]; then
+            sudo ln -sf "$NDK_LLVM_STRIP" /usr/local/bin/strip
+            echo "Overrode /usr/local/bin/strip with NDK's llvm-strip for Android ELF support"
+          fi
 
       - name: Install Bun (host, pinned for module graph compatibility)
         run: |
