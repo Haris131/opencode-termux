@@ -124,11 +124,15 @@ jobs:
           FLAT_DIR="${LLVM_RESOURCE_DIR}/lib/linux"
           sudo mkdir -p "$TARGET_DIR"
           sudo mkdir -p "${FLAT_DIR}/aarch64"
-          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libclang_rt.builtins-aarch64-android.a" \
+          # NDK r28b (clang 19): builtins in flat lib/linux/, libunwind in per-arch lib/linux/<arch>/
+          echo "NDK clang lib/linux contents:"
+          ls -la "${NDK_CLANG_DIR}lib/linux/" 2>&1 || true
+          ls -la "${NDK_CLANG_DIR}lib/linux/aarch64/" 2>&1 || true
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/libclang_rt.builtins-aarch64-android.a" \
             "${TARGET_DIR}/libclang_rt.builtins.a"
           sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libunwind.a" \
             "${TARGET_DIR}/libunwind.a"
-          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libclang_rt.builtins-aarch64-android.a" \
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/libclang_rt.builtins-aarch64-android.a" \
             "${FLAT_DIR}/libclang_rt.builtins-aarch64-android.a"
           sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libunwind.a" \
             "${FLAT_DIR}/aarch64/libunwind.a"
