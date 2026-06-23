@@ -1,111 +1,125 @@
 #!/usr/bin/env bash
-# Cross-compile Bun for Android aarch64
+# Cross-compile Bun for Android aarch64 using Bun 1.3.14's TypeScript build system
 #
 # Usage: ./scripts/build-bun.sh
 #
-# This configures and builds Bun using CMake + Ninja with the Android NDK.
-# Requires WebKit to be built first (scripts/build-webkit.sh).
+# This script:
+# 1. Applies Android patches to the Bun source
+# 2. Configures with --abi=android --android-ndk=<path>
+# 3. Applies the Zig vendor patch (sigaction/sigprocmask bypass)
+# 4. Builds with ninja
 #
-# The Zig vendor patch (sigaction/sigprocmask bypass) must be applied AFTER
-# Bun's build system downloads its custom Zig fork, but BEFORE the bun-zig
-# target compiles. We accomplish this by running `ninja clone-zig` first to
-# trigger the download, then applying the patch, then running the full build.
-#
-# The Zig cache must also be cleared between runs to avoid stale cache entries
-# referencing files from deleted source trees (which causes FileNotFound errors
-# in translate-c output lookup).
+# The Zig vendor patch must be applied AFTER Bun's build system downloads
+# its custom Zig fork, but BEFORE the Zig compilation starts. We accomplish
+# this by running `--configure-only` first, then downloading Zig, then
+# patching, then running the full ninja build.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
 
-# Debug mode: set DEBUG=1 to build with debug symbols and Zig safety checks
+# Debug mode
 DEBUG="${DEBUG:-}"
-BUILD_TYPE="${BUILD_TYPE:-Release}"
 if [ -n "$DEBUG" ]; then
-  # Use RelWithDebInfo for C/C++ (-O2 -g, no sanitizers) but force Zig to
-  # Debug mode for full safety checks and stack traces. CMAKE_BUILD_TYPE=Debug
-  # adds -O0 and -fsanitize flags which break C++ template instantiation on
-  # cross-compilation (JSBuffer.cpp: undefined template s_info).
-  BUILD_TYPE="RelWithDebInfo"
-  ZIG_DEBUG_FLAGS="-DZIG_OPTIMIZE=Debug"
-  echo "=== Building Bun v${BUN_VERSION} for Android aarch64 (ZIG DEBUG MODE) ==="
+  BUILD_FLAGS="--profile=debug"
+  echo "=== Building Bun v${BUN_VERSION} for Android aarch64 (DEBUG) ==="
 else
-  ZIG_DEBUG_FLAGS=""
+  BUILD_FLAGS="--profile=release"
   echo "=== Building Bun v${BUN_VERSION} for Android aarch64 ==="
 fi
 
 # Verify prerequisites
-if [ ! -d "$BUN_SRC" ]; then
+if [ ! -d "$BUN_SRC/.git" ]; then
     echo "ERROR: Bun source not found. Run scripts/apply-patches.sh first."
     exit 1
 fi
 
-if [ ! -d "$WEBKIT_OUTPUT/lib" ]; then
-    echo "ERROR: WebKit not built. Run scripts/build-webkit.sh first."
+# Apply Android patches to Bun source
+echo ">>> Applying Android patches to Bun source..."
+cd "$BUN_SRC"
+git checkout -- . 2>/dev/null || true
+git clean -fd 2>/dev/null || true
+if git apply --stat "$REPO_ROOT/patches/bun/android-support.patch" >/dev/null 2>&1; then
+    git apply "$REPO_ROOT/patches/bun/android-support.patch"
+    echo "    Bun Android patches applied successfully."
+else
+    echo "ERROR: Failed to apply Android patches. Check patch compatibility."
     exit 1
 fi
-
-# Zig cache directory setup.
-#
-# Zig uses two cache locations:
-#   1. --cache-dir (explicit): $BUN_BUILD/cache/zig/local (set by CMake)
-#   2. .zig-cache (implicit): $BUN_SRC/.zig-cache (Zig's default CWD-local cache)
-#
-# On successful builds, Zig hardlinks files between them. The translate-c step
-# writes c-headers-for-zig.zig to one location, and build-obj looks it up from
-# the other. If they're separate directories and one is missing/stale, we get
-# "file_hash FileNotFound" errors.
-#
-# Fix: Symlink .zig-cache -> the explicit cache dir so both paths resolve to
-# the same physical location. Clear both first to avoid stale entries.
-echo ">>> Setting up Zig cache directories..."
-rm -rf "$BUN_BUILD/cache/zig" "$BUN_SRC/.zig-cache"
-mkdir -p "$BUN_BUILD/cache/zig/local"
-mkdir -p "$BUN_BUILD/cache/zig/global"
-ln -sfn "$BUN_BUILD/cache/zig/local" "$BUN_SRC/.zig-cache"
-echo "    Symlinked $BUN_SRC/.zig-cache -> $BUN_BUILD/cache/zig/local"
 
 # Create build directory
 mkdir -p "$BUN_BUILD"
 
-# CMake toolchain is inside the patched Bun source
-BUN_TOOLCHAIN="$BUN_SRC/cmake/toolchains/android-aarch64.cmake"
-if [ ! -f "$BUN_TOOLCHAIN" ]; then
-    echo "ERROR: Android toolchain not found at $BUN_TOOLCHAIN"
-    echo "       Did apply-patches.sh run successfully?"
+# Configure step: generate build.ninja without building
+echo ">>> Configuring Bun (generating build.ninja)..."
+cd "$BUN_SRC"
+
+# The host Bun (1.3.14+) runs the TypeScript build scripts
+HOST_BUN="${HOST_BUN:-bun}"
+
+# WebKit: use prebuilt tarballs (downloads automatically).
+# For Android, the build system handles cross-compilation WebKit prebuilts.
+"$HOST_BUN" run build \
+    $BUILD_FLAGS \
+    --abi=android \
+    --android-ndk="$ANDROID_NDK_HOME" \
+    --android-api-level="$ANDROID_API" \
+    --configure-only \
+    --webkit=prebuilt \
+    2>&1
+
+echo ""
+echo ">>> Configure complete. Build directory: $BUN_BUILD"
+
+# Find the build directory (the build system creates a dir under build/)
+# Look for the most recently created build.ninja
+BUILD_NINJA=$(find "$BUN_SRC/build" -name "build.ninja" -newer "$BUN_SRC/scripts/build.ts" 2>/dev/null | head -1)
+if [ -z "$BUILD_NINJA" ]; then
+    BUILD_NINJA="$BUN_SRC/build/release/build.ninja"
+    if [ ! -f "$BUILD_NINJA" ]; then
+        BUILD_NINJA="$BUN_SRC/build/debug/build.ninja"
+    fi
+fi
+
+if [ ! -f "$BUILD_NINJA" ]; then
+    echo "ERROR: build.ninja not found. Configure step may have failed."
+    ls -la "$BUN_SRC/build/" 2>/dev/null || echo "    No build/ directory found"
     exit 1
 fi
 
-# Configure
-echo ">>> Configuring Bun..."
-cd "$BUN_BUILD"
+NINJA_DIR=$(dirname "$BUILD_NINJA")
+echo "    Ninja build dir: $NINJA_DIR"
 
-cmake \
-    -G Ninja \
-    -DCMAKE_TOOLCHAIN_FILE="$BUN_TOOLCHAIN" \
-    -DANDROID_NDK_HOME="$ANDROID_NDK_HOME" \
-    -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-    -DENABLE_LTO=OFF \
-    -DBUN_LINK_ONLY=OFF \
-    -DWEBKIT_LOCAL=ON \
-    -DWEBKIT_PATH="$WEBKIT_OUTPUT" \
-    $ZIG_DEBUG_FLAGS \
-    "$BUN_SRC"
+# Try to download Zig vendor BEFORE the full build
+# The zig_fetch rule is defined in the generated build.ninja
+echo ">>> Downloading Zig vendor..."
+cd "$NINJA_DIR"
 
-echo ""
-echo ">>> Configure complete."
-
-# Download Zig vendor BEFORE the full build.
-# The clone-zig target downloads Bun's custom Zig fork to $BUN_SRC/vendor/zig/.
-# We need Zig downloaded first so we can patch posix.zig before compilation starts.
-echo ">>> Downloading Zig vendor (clone-zig target)..."
-cd "$BUN_BUILD"
-ninja clone-zig || true  # May not exist as a standalone target in all versions
+# Try various target names for downloading Zig
+ZIG_VENDOR_DIR="$BUN_SRC/vendor/zig"
+if [ ! -f "$ZIG_VENDOR_DIR/zig" ] && [ ! -f "$ZIG_VENDOR_DIR/zig.exe" ]; then
+    # Look for the ninja rule that downloads zig
+    ZIG_TARGETS=$(grep -o 'build [^:]*: zig_fetch' "$BUILD_NINJA" 2>/dev/null | awk '{print $2}' | tr -d ':')
+    if [ -n "$ZIG_TARGETS" ]; then
+        for target in $ZIG_TARGETS; do
+            echo "    Running ninja target: $target"
+            ninja "$target" 2>&1 || true
+        done
+    else
+        # Fallback: try to build a minimal target that triggers zig download
+        echo "    No zig_fetch target found. Trying to build a minimal target..."
+        # Look up the zig binary output path in build.ninja
+        ZIG_BIN_PATH=$(grep -m1 "vendor/zig/zig" "$BUILD_NINJA" 2>/dev/null | head -1 | sed 's/.*build //' | sed 's/:.*//')
+        if [ -n "$ZIG_BIN_PATH" ]; then
+            echo "    Building zig target: $ZIG_BIN_PATH"
+            ninja "$ZIG_BIN_PATH" 2>&1 || true
+        fi
+    fi
+fi
 
 # Apply Zig vendor patch AFTER download, BEFORE build
-ZIG_POSIX="$BUN_SRC/vendor/zig/lib/std/posix.zig"
+ZIG_POSIX="$ZIG_VENDOR_DIR/lib/std/posix.zig"
 if [ -f "$ZIG_POSIX" ]; then
     echo ">>> Applying Zig vendor patch (sigaction/sigprocmask Android bypass)..."
     cd "$BUN_SRC"
@@ -113,7 +127,6 @@ if [ -f "$ZIG_POSIX" ]; then
         patch -p1 < "$REPO_ROOT/patches/zig/posix-android-sigaction.patch"
         echo "    Zig patch applied successfully."
     else
-        # Check if already applied by looking for the Android bypass code
         if grep -q "comptime builtin.abi.isAndroid()" "$ZIG_POSIX" 2>/dev/null; then
             echo "    Zig patch already applied."
         else
@@ -132,13 +145,10 @@ fi
 
 # Build
 echo ">>> Building Bun (this will take 30-45 minutes)..."
-echo "    .zig-cache -> $(readlink -f "$BUN_SRC/.zig-cache" 2>/dev/null || echo 'NOT A SYMLINK')"
-cd "$BUN_BUILD"
+cd "$NINJA_DIR"
 ninja -j"$JOBS" 2>&1 || {
     echo ""
     echo ">>> Build failed. Checking if Zig was downloaded during the build..."
-    # If Zig was just downloaded during the build and the patch wasn't applied,
-    # apply it now and retry
     if [ -f "$ZIG_POSIX" ] && ! grep -q "comptime builtin.abi.isAndroid()" "$ZIG_POSIX" 2>/dev/null; then
         echo ">>> Zig downloaded during build but patch not applied. Applying now..."
         cd "$BUN_SRC"
@@ -146,11 +156,8 @@ ninja -j"$JOBS" 2>&1 || {
             echo "ERROR: Zig patch failed to apply"
             exit 1
         }
-        echo "    Zig patch applied. Clearing Zig cache and rebuilding..."
-        rm -rf "$BUN_BUILD/cache/zig" "$BUN_SRC/.zig-cache"
-        mkdir -p "$BUN_BUILD/cache/zig/local" "$BUN_BUILD/cache/zig/global"
-        ln -sfn "$BUN_BUILD/cache/zig/local" "$BUN_SRC/.zig-cache"
-        cd "$BUN_BUILD"
+        echo "    Zig patch applied. Rebuilding..."
+        cd "$NINJA_DIR"
         ninja -j"$JOBS"
     else
         echo "ERROR: Build failed (Zig patch was already applied — different error)"
@@ -158,20 +165,20 @@ ninja -j"$JOBS" 2>&1 || {
     fi
 }
 
-# Verify output
-BUN_BINARY="$BUN_BUILD/bun"
-if [ ! -f "$BUN_BINARY" ]; then
-    # Try bun-profile (unstripped)
-    BUN_BINARY="$BUN_BUILD/bun-profile"
-fi
-
+# Verify output: find the bun binary in the build directory
+BUN_BINARY=$(find "$NINJA_DIR" -maxdepth 1 -name "bun" -o -name "bun-debug" -o -name "bun-profile" 2>/dev/null | head -1)
 if [ ! -f "$BUN_BINARY" ]; then
     echo "ERROR: Bun binary not found after build"
+    echo "    Searched in: $NINJA_DIR"
+    ls -la "$NINJA_DIR"/bun* 2>/dev/null || echo "    No bun* files found"
     exit 1
 fi
 
+# Copy to expected location for downstream scripts
+cp "$BUN_BINARY" "$BUN_BUILD/bun"
+
 echo ""
 echo "=== Bun build complete ==="
-echo "Binary: $BUN_BINARY"
-echo "Size: $(du -h "$BUN_BINARY" | cut -f1)"
-file "$BUN_BINARY"
+echo "Binary: $BUN_BUILD/bun"
+echo "Size: $(du -h "$BUN_BUILD/bun" | cut -f1)"
+file "$BUN_BUILD/bun"

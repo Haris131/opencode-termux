@@ -95,8 +95,6 @@ BUILD_SCRIPT="$REPO_ROOT/scripts/build-opencode-android.ts"
 BUILD_SCRIPT_LOCAL="$OPENCODE_PKG/build-opencode-android.ts"
 cp "$BUILD_SCRIPT" "$BUILD_SCRIPT_LOCAL"
 
-# Copy CompressionStream polyfill alongside the build script
-cp "$REPO_ROOT/scripts/compression-polyfill.js" "$OPENCODE_PKG/compression-polyfill.js"
 cd "$OPENCODE_PKG"
 
 OPENCODE_VERSION="$OPENCODE_VERSION" \
@@ -105,9 +103,8 @@ OPENCODE_VERSION="$OPENCODE_VERSION" \
     OPENCODE_DIR="$OPENCODE_PKG" \
     "$HOST_BUN" run "$BUILD_SCRIPT_LOCAL"
 
-# Clean up copied script and polyfill
+# Clean up copied script
 rm -f "$BUILD_SCRIPT_LOCAL"
-rm -f "$OPENCODE_PKG/compression-polyfill.js"
 
 # Restore original libopentui.so
 if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
