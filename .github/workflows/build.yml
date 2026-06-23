@@ -105,7 +105,34 @@ jobs:
             rm ndk.zip
           fi
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$NDK_DIR" >> $GITHUB_ENV
           echo "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: Link Android compiler-rt into LLVM 21 resource dir
+        run: |
+          # LLVM 21's clang needs Android compiler-rt builtins at an exact path:
+          #   <resource-dir>/lib/<target-triple>/libclang_rt.builtins.a
+          # The NDK ships them under a different layout. Bun's configure step
+          # (linkNdkRuntimesIntoClang) tries to create these symlinks but
+          # can't because /usr/lib/llvm-21/lib/clang/21/ is root-owned.
+          # Pre-create them here with sudo.
+          LLVM_RESOURCE_DIR="/usr/lib/llvm-21/lib/clang/21"
+          NDK_CLANG_DIR=$(ls -d /opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/)
+          NDK_CLANG_VER=$(basename "$NDK_CLANG_DIR")
+          echo "NDK clang version: $NDK_CLANG_VER"
+          TARGET_DIR="${LLVM_RESOURCE_DIR}/lib/aarch64-unknown-linux-android${ANDROID_API}"
+          FLAT_DIR="${LLVM_RESOURCE_DIR}/lib/linux"
+          sudo mkdir -p "$TARGET_DIR"
+          sudo mkdir -p "${FLAT_DIR}/aarch64"
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libclang_rt.builtins-aarch64-android.a" \
+            "${TARGET_DIR}/libclang_rt.builtins.a"
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libunwind.a" \
+            "${TARGET_DIR}/libunwind.a"
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libclang_rt.builtins-aarch64-android.a" \
+            "${FLAT_DIR}/libclang_rt.builtins-aarch64-android.a"
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libunwind.a" \
+            "${FLAT_DIR}/aarch64/libunwind.a"
+          echo "Android compiler-rt symlinks created in LLVM 21 resource dir"
 
       - name: Install Bun (host, pinned for module graph compatibility)
         run: |
