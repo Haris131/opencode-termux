@@ -71,13 +71,24 @@ jobs:
             echo "apt-get update attempt $i failed, retrying..."
             sleep 5
           done
+          # Clang 21 is required by Bun 1.3.14's build system (for host-side tools)
+          # Install from LLVM repo since Ubuntu LTS may not ship Clang 21
+          sudo apt-get install -y lsb-release wget software-properties-common
+          LLVM_VERSION=21
+          wget -qO- "https://apt.llvm.org/llvm-snapshot.gpg.key" | sudo tee /etc/apt/trusted.gpg.d/llvm.asc
+          sudo add-apt-repository -y "deb https://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-${LLVM_VERSION} main"
+          sudo apt-get update
           sudo apt-get install -y \
+            "clang-${LLVM_VERSION}" "lld-${LLVM_VERSION}" "clangd-${LLVM_VERSION}" \
             ninja-build python3 ruby perl \
             git curl wget unzip xz-utils zip \
             build-essential pkg-config \
             libxml2-dev libxslt1-dev \
             golang-go \
             autoconf automake libtool
+          sudo update-alternatives --install /usr/bin/clang clang "/usr/bin/clang-${LLVM_VERSION}" 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ "/usr/bin/clang++-${LLVM_VERSION}" 100
+          sudo update-alternatives --install /usr/bin/lld lld "/usr/bin/lld-${LLVM_VERSION}" 100
 
       - name: Install Android NDK r28b
         run: |
