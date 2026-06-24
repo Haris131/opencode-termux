@@ -108,31 +108,20 @@ for (let i = 0; i < debugSlice.length; i += 16) {
 
 const trailerBuf = Buffer.from(TRAILER_STR)
 const searchBuf = Buffer.from(hostBytes.buffer, hostBytes.byteOffset, hostBytes.length)
-const trailerEnd = hostBytes.length - 8
-const expectedTrailerStart = trailerEnd - TRAILER_LEN
 
-const foundTrailer = searchBuf.compare(
-  trailerBuf, 0, TRAILER_LEN,
-  expectedTrailerStart, trailerEnd
-) === 0
-
-if (!foundTrailer) {
-  console.error("ERROR: Bun standalone trailer not found at expected position")
-  console.error("       The standalone binary format may have changed.")
-  const trailerPos = searchBuf.lastIndexOf(trailerBuf)
-  if (trailerPos >= 0) {
-    console.error(`       However, trailer found at offset ${trailerPos} (expected ${expectedTrailerStart})`)
-    console.error(`       Gap from trailer end to file end: ${debugEnd - (trailerPos + TRAILER_LEN)} bytes (expected 8)`)
-  }
+// Search for trailer dynamically (Bun v1.3.x may have extra padding after it)
+const trailerPos = searchBuf.lastIndexOf(trailerBuf)
+if (trailerPos < 0) {
+  console.error("ERROR: Bun standalone trailer not found")
   process.exit(1)
 }
+const actualTrailerStart = trailerPos
+const offsetsStart = actualTrailerStart - OFFSETS_SIZE_CONST
 
-const offsetsStart = expectedTrailerStart - OFFSETS_SIZE_CONST
-
-console.log(`\n=== DEBUG: trailer at ${expectedTrailerStart}, offsets start: ${offsetsStart} ===`)
+console.log(`\n=== DEBUG: trailer found at ${actualTrailerStart}, offsets start: ${offsetsStart} ===`)
 const dumpStart = Math.max(0, offsetsStart - 8)
-const dumpSlice = Buffer.from(hostBytes.buffer, dumpStart, expectedTrailerStart + TRAILER_LEN - dumpStart)
-console.log(`Trailer text: ${searchBuf.toString('utf8', expectedTrailerStart, expectedTrailerStart + TRAILER_LEN)}`)
+const dumpSlice = Buffer.from(hostBytes.buffer, dumpStart, actualTrailerStart + TRAILER_LEN - dumpStart)
+console.log(`Trailer text: ${searchBuf.toString('utf8', actualTrailerStart, actualTrailerStart + TRAILER_LEN)}`)
 console.log(`Last 8 bytes (total_size u64): ${Array.from(searchBuf.slice(debugEnd-8, debugEnd)).map(b => b.toString(16).padStart(2,'0')).join(' ')}`)
 console.log(`Total size as u64: ${Number(searchBuf.readBigUInt64LE(debugEnd-8))}`)
 
@@ -141,7 +130,7 @@ console.log(`Raw byte_count: ${offsetsByteCount}`)
 console.log(`byte_count hex: ${Array.from(searchBuf.slice(offsetsStart, offsetsStart+8)).map(b => b.toString(16).padStart(2,'0')).join(' ')}`)
 
 const moduleGraphSize = offsetsByteCount + OFFSETS_SIZE_CONST + TRAILER_LEN
-const hostBunSize = hostBytes.length - 8 - moduleGraphSize
+const hostBunSize = actualTrailerStart - offsetsByteCount - OFFSETS_SIZE_CONST
 
 console.log(`Host standalone size: ${hostBytes.length}`)
 console.log(`Derived host bun size: ${hostBunSize}`)
@@ -152,7 +141,7 @@ if (hostBunSize <= 0) {
   process.exit(1)
 }
 
-const moduleGraphBytes = hostBytes.slice(hostBunSize, hostBytes.length - 8)
+const moduleGraphBytes = hostBytes.slice(hostBunSize, hostBunSize + moduleGraphSize)
 console.log(`Module graph extracted: ${moduleGraphBytes.length} bytes`)
 console.log(`Trailer verified: OK`)
 
