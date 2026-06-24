@@ -41,11 +41,15 @@ OPENTUI_PATCH="$REPO_ROOT/patches/opentui/android-libc-link.patch"
 if [ -f "$OPENTUI_PATCH" ]; then
     echo ">>> Applying opentui Android patch..."
     cd "$OPENTUI_SRC"
-    if ! git apply --check "$OPENTUI_PATCH" 2>/dev/null; then
-        echo "    Patch already applied or does not apply cleanly, skipping"
-    else
+    # Reset build.zig to pristine state before applying the fresh patch.
+    # This handles the case where a prior version was already applied.
+    git checkout -- packages/core/src/zig/build.zig 2>/dev/null || true
+    if git apply --check "$OPENTUI_PATCH" 2>/dev/null; then
         git apply "$OPENTUI_PATCH"
         echo "    Patch applied successfully"
+    else
+        echo "    ERROR: patch does not apply cleanly to pristine build.zig"
+        exit 1
     fi
 fi
 
