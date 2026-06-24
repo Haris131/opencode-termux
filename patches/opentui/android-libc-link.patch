@@ -51,6 +51,10 @@
 +        if (ndk_lib_dir) |dir| {
 +            const libc_path = std.fmt.allocPrint(b.allocator, "{s}/libc.so", .{dir}) catch unreachable;
 +            lib.addObjectFile(.{ .cwd_relative = libc_path });
++            // dir = <NDK_TOOLCHAIN>/sysroot/usr/lib/<TRIPLE>/<API>
++            // We need: <NDK_TOOLCHAIN>/sysroot/usr/include for C headers
++            const ndk_include = std.fmt.allocPrint(b.allocator, "{s}/../../../include", .{dir}) catch unreachable;
++            lib.addSystemIncludePath(.{ .cwd_relative = ndk_include });
 +        }
 +    }
 +
