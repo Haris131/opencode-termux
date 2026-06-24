@@ -96,15 +96,15 @@ function* readElf64Sections(data: Uint8Array) {
   if (data[4] !== 2) throw new Error("Only 64-bit ELF supported")
 
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength)
-  const e_shoff = Number(v.getBigUInt64(0x28, true))
+  const e_shoff = Number(v.getBigUint64(0x28, true))
   const e_shentsize = v.getUint16(0x3A, true)
   const e_shnum = v.getUint16(0x3C, true)
   const e_shstrndx = v.getUint16(0x3E, true)
 
   // Read section name string table (.shstrtab)
   const shstrHdr = e_shoff + e_shstrndx * e_shentsize
-  const shstrOff = Number(v.getBigUInt64(shstrHdr + 0x18, true))
-  const shstrSz  = Number(v.getBigUInt64(shstrHdr + 0x20, true))
+  const shstrOff = Number(v.getBigUint64(shstrHdr + 0x18, true))
+  const shstrSz  = Number(v.getBigUint64(shstrHdr + 0x20, true))
 
   for (let i = 0; i < e_shnum; i++) {
     const off = e_shoff + i * e_shentsize
@@ -113,8 +113,8 @@ function* readElf64Sections(data: Uint8Array) {
     for (let j = nameOff; j < shstrOff + shstrSz && data[j] !== 0; j++) name += String.fromCharCode(data[j])
     yield {
       name,
-      offset: Number(v.getBigUInt64(off + 0x18, true)),
-      size:   Number(v.getBigUInt64(off + 0x20, true)),
+      offset: Number(v.getBigUint64(off + 0x18, true)),
+      size:   Number(v.getBigUint64(off + 0x20, true)),
     }
   }
 }
@@ -125,7 +125,7 @@ for (const sec of readElf64Sections(hostBytes)) {
   if (sec.name === ".bun") {
     // Format: [u64 payload_len][payload bytes]
     const view = new DataView(hostBytes.buffer, hostBytes.byteOffset + sec.offset, 8)
-    const payloadLen = Number(view.getBigUInt64(0, true))
+    const payloadLen = Number(view.getBigUint64(0, true))
     moduleGraphBytes = hostBytes.slice(sec.offset + 8, sec.offset + 8 + payloadLen)
     console.log(`Found .bun section at file offset ${sec.offset}: ${payloadLen} bytes payload`)
     break
