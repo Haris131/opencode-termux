@@ -1,14 +1,33 @@
-diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 5a8bcb8..b1d4642 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
-@@ -273,6 +273,29 @@ fn buildTarget(
+@@ -160,11 +160,17 @@
+     addMiniaudioShim(b, artifact, target, macos_sdk_path);
+ 
+     switch (target.result.os.tag) {
+-        .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
+         .linux => {
+-            artifact.linkSystemLibrary("dl");
+-            artifact.linkSystemLibrary("pthread");
++            if (target.result.abi == .android or target.result.abi == .androideabi) {
++                // Android API 23+ folded dl and pthread into libc.
++                // Linking them separately fails because they do not exist as
++                // standalone shared libraries in the NDK sysroot.
++            } else {
++                artifact.linkSystemLibrary("dl");
++                artifact.linkSystemLibrary("pthread");
++            }
+         },
++        .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
+         else => {},
+     }
+ }
+@@ -449,6 +455,29 @@
          .linkage = .dynamic,
      });
  
 +    // On Android, the .so must have NEEDED libc.so so dlopen can resolve
-+    // symbols like getauxval. Zig doesn't bundle Android libc, so we directly
-+    // add the NDK sysroot's libc.so stub as a link input.
++    // symbols like getauxval. Zig does not bundle Android libc, so we directly
++    // add the NDK sysroot libc.so stub as a link input.
 +    const os_tag = target.result.os.tag;
 +    const abi = target.result.abi;
 +    if (os_tag == .linux and (abi == .android or abi == .androideabi)) {
@@ -23,12 +42,12 @@ index 5a8bcb8..b1d4642 100644
 +        };
 +        if (ndk_lib) |dir| {
 +            // Use addObjectFile to directly link the libc.so stub without triggering
-+            // Zig's native libc provision
++            // Zig native libc provision
 +            const libc_path = std.fmt.allocPrint(b.allocator, "{s}/libc.so", .{dir}) catch unreachable;
 +            lib.addObjectFile(.{ .cwd_relative = libc_path });
 +        }
 +    }
 +
+     addNativeAudioDependencies(b, lib, target, macos_sdk_path);
+ 
      const install_dir = b.addInstallArtifact(lib, .{
-         .dest_dir = .{
-             .override = .{

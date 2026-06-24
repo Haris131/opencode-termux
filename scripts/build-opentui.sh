@@ -57,6 +57,10 @@ if [ ! -f "$OPENTUI_ZIG_DIR/build.zig" ]; then
 fi
 
 echo ">>> Building with Zig (target: aarch64-linux-android)..."
+
+# Set NDK library path for the Android Zig patch to find libc.so stub
+export ANDROID_NDK_LIB_DIR="${NDK_TOOLCHAIN}/sysroot/usr/lib/${ANDROID_TRIPLE_API}"
+
 cd "$OPENTUI_ZIG_DIR"
 
 "$ZIG_BIN" build \
