@@ -1,6 +1,19 @@
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
-@@ -160,11 +160,17 @@
+@@ -125,7 +125,11 @@
+     };
+ 
+     artifact.addIncludePath(b.path("."));
+-    artifact.linkLibC();
++    // Android: Zig 0.15 cannot provide native libc for Android targets.
++    // Skip linkLibC() to avoid "unable to provide libc" error.
++    if (target.result.abi != .android and target.result.abi != .androideabi) {
++        artifact.linkLibC();
++    }
+     artifact.addCSourceFile(.{
+         .file = b.path("miniaudio_shim.c"),
+         .flags = c_flags,
+@@ -160,11 +164,15 @@
      addMiniaudioShim(b, artifact, target, macos_sdk_path);
  
      switch (target.result.os.tag) {
@@ -10,8 +23,6 @@
 -            artifact.linkSystemLibrary("pthread");
 +            if (target.result.abi == .android or target.result.abi == .androideabi) {
 +                // Android API 23+ folded dl and pthread into libc.
-+                // Linking them separately fails because they do not exist as
-+                // standalone shared libraries in the NDK sysroot.
 +            } else {
 +                artifact.linkSystemLibrary("dl");
 +                artifact.linkSystemLibrary("pthread");
@@ -21,22 +32,25 @@
          else => {},
      }
  }
-@@ -449,6 +455,21 @@
+@@ -449,6 +457,24 @@
          .linkage = .dynamic,
      });
  
-+    // On Android, add NDK sysroot lib path so -lc finds libc.so.
-+    // Zig 0.15 does not bundle Android libc, so we point it at the NDK.
-+    // We use addLibraryPath (not addObjectFile) to avoid triggering Zig's
-+    // internal libc provision which does not support Android.
++    // On Android, skip linkLibC (Zig cannot provide native libc) and
++    // instead link the NDK libc.so stub directly via addObjectFile.
++    // This ensures NEEDED libc.so in the output (required for dlopen).
 +    const os_tag = target.result.os.tag;
 +    const abi = target.result.abi;
 +    if (os_tag == .linux and (abi == .android or abi == .androideabi)) {
-+        if (std.process.getEnvVarOwned(b.allocator, "ANDROID_NDK_LIB_DIR") catch null) |dir| {
-+            lib.addLibraryPath(.{ .cwd_relative = dir });
-+        } else if (std.process.getEnvVarOwned(b.allocator, "ANDROID_NDK_HOME") catch null) |ndk_home| {
-+            const dir = std.fmt.allocPrint(b.allocator, "{s}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/24", .{ndk_home}) catch unreachable;
-+            lib.addLibraryPath(.{ .cwd_relative = dir });
++        const ndk_lib_dir = if (std.process.getEnvVarOwned(b.allocator, "ANDROID_NDK_LIB_DIR") catch null) |dir|
++            dir
++        else if (std.process.getEnvVarOwned(b.allocator, "ANDROID_NDK_HOME") catch null) |ndk_home|
++            std.fmt.allocPrint(b.allocator, "{s}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/24", .{ndk_home}) catch unreachable
++        else
++            null;
++        if (ndk_lib_dir) |dir| {
++            const libc_path = std.fmt.allocPrint(b.allocator, "{s}/libc.so", .{dir}) catch unreachable;
++            lib.addObjectFile(.{ .cwd_relative = libc_path });
 +        }
 +    }
 +
