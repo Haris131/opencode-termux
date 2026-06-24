@@ -32,7 +32,7 @@
          else => {},
      }
  }
-@@ -449,6 +457,28 @@
+@@ -449,6 +457,32 @@
          .linkage = .dynamic,
      });
  
@@ -55,6 +55,10 @@
 +            // We need: <NDK_TOOLCHAIN>/sysroot/usr/include for C headers
 +            const ndk_include = std.fmt.allocPrint(b.allocator, "{s}/../../../include", .{dir}) catch unreachable;
 +            lib.addSystemIncludePath(.{ .cwd_relative = ndk_include });
++            const dir_parent = std.fs.path.dirname(dir) orelse unreachable;
++            const triple = std.fs.path.basename(dir_parent);
++            const ndk_include_arch = std.fmt.allocPrint(b.allocator, "{s}/../../../include/{s}", .{dir, triple}) catch unreachable;
++            lib.addSystemIncludePath(.{ .cwd_relative = ndk_include_arch });
 +        }
 +    }
 +
