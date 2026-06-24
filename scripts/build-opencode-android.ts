@@ -110,7 +110,7 @@ function* readElf64Sections(data: Uint8Array) {
     const off = e_shoff + i * e_shentsize
     const nameOff = v.getUint32(off, true)
     let name = ""
-    for (let j = nameOff; j < shstrOff + shstrSz && data[j] !== 0; j++) name += String.fromCharCode(data[j])
+    for (let j = shstrOff + nameOff; j < shstrOff + shstrSz && data[j] !== 0; j++) name += String.fromCharCode(data[j])
     yield {
       name,
       offset: Number(v.getBigUint64(off + 0x18, true)),
