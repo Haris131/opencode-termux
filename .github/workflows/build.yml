@@ -42,7 +42,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.commit_sha || 'main' }}
 
@@ -178,7 +178,7 @@ jobs:
 
       - name: Cache Bun binary
         id: cache-bun
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.WORK_DIR }}/bun-build/bun
           key: bun-android-v3-${{ env.BUN_VERSION }}-${{ steps.hashes.outputs.bun_patch_hash }}-${{ steps.hashes.outputs.zig_patch_hash }}-${{ steps.hashes.outputs.build_script_hash }}-debug${{ github.event.inputs.debug || 'false' }}
@@ -268,7 +268,7 @@ jobs:
       # Release
       # =============================================
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: OpenCode ${{ env.OPENCODE_VERSION }} for Android/Termux (aarch64)
           tag_name: v${{ env.OPENCODE_VERSION }}
