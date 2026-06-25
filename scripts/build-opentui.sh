@@ -34,9 +34,8 @@ else
     echo ">>> opentui source exists at $OPENTUI_SRC"
 fi
 
-# Apply Android libc linking patch
-# Without this patch, the .so won't have NEEDED: libc.so, and Android's
-# dlopen() will fail because it can't resolve symbols like getauxval.
+# Apply Android patch (guards dl/pthread on Android API 23+ where they're
+# folded into libc; relies on Zig's native NDK support for libc linking).
 OPENTUI_PATCH="$REPO_ROOT/patches/opentui/android-libc-link.patch"
 if [ -f "$OPENTUI_PATCH" ]; then
     echo ">>> Applying opentui Android patch..."
@@ -62,9 +61,8 @@ fi
 
 echo ">>> Building with Zig (target: aarch64-linux-android)..."
 
-# Set NDK library path for the Android Zig patch to find libc.so stub
-# NDK layout: sysroot/usr/lib/<triple>/<api>/libc.so (e.g. aarch64-linux-android/24/)
-export ANDROID_NDK_LIB_DIR="${NDK_TOOLCHAIN}/sysroot/usr/lib/${ANDROID_TRIPLE}/${ANDROID_API}"
+# Ensure both NDK env vars are set for Zig's native NDK auto-detection
+export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
 
 cd "$OPENTUI_ZIG_DIR"
 
