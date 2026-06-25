@@ -1,0 +1,13 @@
+diff --git a/packages/core/src/zig/yoga.zig b/packages/core/src/zig/yoga.zig
+index 3f8b4b5..115da65 100644
+--- a/packages/core/src/zig/yoga.zig
++++ b/packages/core/src/zig/yoga.zig
+@@ -86,7 +86,7 @@ const CallbackContext = struct {
+ 
+ const JsMeasureCallback = *const fn (?*anyopaque, f32, u32, f32, u32) callconv(.c) void;
+ const JsDirtiedCallback = *const fn () callconv(.c) void;
+-const callback_allocator = std.heap.c_allocator;
++const callback_allocator = std.heap.page_allocator;
+ var opentui_config: YGConfigRef = null;
+ var opentui_config_mutex: std.Thread.Mutex = .{};
+ 

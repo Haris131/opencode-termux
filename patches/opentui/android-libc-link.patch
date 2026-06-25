@@ -1,23 +1,110 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..efda41e 100644
+index 0c82ba3..b4660fa 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
-@@ -184,11 +184,15 @@ fn addNativeAudioDependencies(
-     addMiniaudioShim(b, artifact, target, macos_sdk_path);
+@@ -134,6 +134,19 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
+     );
+ }
  
++fn addAndroidNdkPaths(b: *std.Build, artifact: *std.Build.Step.Compile) void {
++    const ndk_home = b.graph.env_map.get("ANDROID_NDK_HOME") orelse
++        @panic("ANDROID_NDK_HOME must be set for Android builds");
++    const ndk_tc = b.fmt("{s}/toolchains/llvm/prebuilt/linux-x86_64", .{ndk_home});
++    const ndk_sys = b.fmt("{s}/sysroot", .{ndk_tc});
++    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{ndk_sys}) });
++    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/aarch64-linux-android", .{ndk_sys}) });
++    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/include/c++/v1", .{ndk_tc}) });
++    artifact.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/24", .{ndk_sys}) });
++    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/24/crtbegin_so.o", .{ndk_sys}) });
++    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/24/crtend_so.o", .{ndk_sys}) });
++}
++
+ fn addMiniaudioShim(
+     b: *std.Build,
+     artifact: *std.Build.Step.Compile,
+@@ -141,6 +154,15 @@ fn addMiniaudioShim(
+     macos_sdk_path: ?[]const u8,
+ ) void {
+     const c_flags: []const []const u8 = switch (target.result.os.tag) {
++        .linux => blk: {
++            if (target.result.abi == .android or target.result.abi == .androideabi) {
++                const flags = b.allocator.alloc([]const u8, 2) catch @panic("OOM");
++                flags[0] = "-std=c99";
++                flags[1] = "-DMA_NO_RUNTIME_LINKING";
++                break :blk flags;
++            }
++            break :blk &.{"-std=c99"};
++        },
+         .macos => blk: {
+             const flags = b.allocator.alloc([]const u8, 4) catch @panic("OOM");
+             flags[0] = "-std=c99";
+@@ -153,7 +175,13 @@ fn addMiniaudioShim(
+     };
+ 
+     artifact.addIncludePath(b.path("."));
+-    artifact.linkLibC();
++    if (target.result.abi == .android or target.result.abi == .androideabi) {
++        addAndroidNdkPaths(b, artifact);
++        artifact.linkSystemLibrary("c");
++        artifact.linkSystemLibrary("m");
++    } else {
++        artifact.linkLibC();
++    }
+     artifact.addCSourceFile(.{
+         .file = b.path("miniaudio_shim.c"),
+         .flags = c_flags,
+@@ -190,17 +218,23 @@ fn addNativeAudioDependencies(
      switch (target.result.os.tag) {
--        .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
+         .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
          .linux => {
 -            artifact.linkSystemLibrary("dl");
 -            artifact.linkSystemLibrary("pthread");
-+            if (target.result.abi == .android or target.result.abi == .androideabi) {
-+                // Android API 23+ folded dl and pthread into libc.
-+            } else {
++            if (target.result.abi != .android and target.result.abi != .androideabi) {
 +                artifact.linkSystemLibrary("dl");
 +                artifact.linkSystemLibrary("pthread");
 +            }
          },
-+        .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
          else => {},
      }
  }
+ 
+-fn addYogaDependencies(b: *std.Build, artifact: *std.Build.Step.Compile) void {
++fn addYogaDependencies(b: *std.Build, artifact: *std.Build.Step.Compile, target: std.Build.ResolvedTarget) void {
+     const yoga_dep = b.dependency("yoga", .{});
+ 
+-    artifact.linkLibCpp();
++    if (target.result.abi == .android or target.result.abi == .androideabi) {
++        artifact.linkSystemLibrary("c++");
++    } else {
++        artifact.linkLibCpp();
++    }
+     artifact.addIncludePath(yoga_dep.path(""));
+     artifact.addCSourceFiles(.{
+         .root = yoga_dep.path(""),
+@@ -320,7 +354,7 @@ pub fn build(b: *std.Build) void {
+         std.process.exit(1);
+     }
+     addNativeAudioDependencies(b, test_artifact, native_target, macos_sdk_path);
+-    addYogaDependencies(b, test_artifact);
++    addYogaDependencies(b, test_artifact, native_target);
+ 
+     const run_test = b.addRunArtifact(test_artifact);
+     test_step.dependOn(&run_test.step);
+@@ -360,7 +394,7 @@ pub fn build(b: *std.Build) void {
+         std.process.exit(1);
+     }
+     addNativeAudioDependencies(b, bench_ffi_lib, native_target, macos_sdk_path);
+-    addYogaDependencies(b, bench_ffi_lib);
++    addYogaDependencies(b, bench_ffi_lib, native_target);
+     const install_bench_ffi = b.addInstallArtifact(bench_ffi_lib, .{});
+     bench_ffi_step.dependOn(&install_bench_ffi.step);
+     bench_step.dependOn(bench_ffi_step);
+@@ -492,7 +526,7 @@ fn buildTarget(
+     });
+ 
+     addNativeAudioDependencies(b, lib, target, macos_sdk_path);
+-    addYogaDependencies(b, lib);
++    addYogaDependencies(b, lib, target);
+ 
+     const install_dir = b.addInstallArtifact(lib, .{
+         .dest_dir = .{

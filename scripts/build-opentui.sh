@@ -34,23 +34,31 @@ else
     echo ">>> opentui source exists at $OPENTUI_SRC"
 fi
 
-# Apply Android patch (guards dl/pthread on Android API 23+ where they're
-# folded into libc; relies on Zig's native NDK support for libc linking).
-OPENTUI_PATCH="$REPO_ROOT/patches/opentui/android-libc-link.patch"
-if [ -f "$OPENTUI_PATCH" ]; then
-    echo ">>> Applying opentui Android patch..."
-    cd "$OPENTUI_SRC"
-    # Reset build.zig to pristine state before applying the fresh patch.
-    # This handles the case where a prior version was already applied.
-    git checkout -- packages/core/src/zig/build.zig 2>/dev/null || true
-    if git apply --check "$OPENTUI_PATCH" 2>/dev/null; then
-        git apply "$OPENTUI_PATCH"
-        echo "    Patch applied successfully"
-    else
-        echo "    ERROR: patch does not apply cleanly to pristine build.zig"
-        exit 1
+# Apply Android patches:
+#   1. android-libc-link.patch: skips linkLibC/linkLibCpp for Android,
+#      provides NDK paths and links system libs manually instead.
+#   2. yoga-page-allocator.patch: replaces c_allocator with page_allocator
+#      to remove the only direct c_allocator reference in Zig source.
+echo ">>> Resetting opentui source files to pristine state..."
+cd "$OPENTUI_SRC"
+git checkout -- packages/core/src/zig/ 2>/dev/null || true
+
+for patch in \
+    "$REPO_ROOT/patches/opentui/android-libc-link.patch" \
+    "$REPO_ROOT/patches/opentui/yoga-page-allocator.patch"
+do
+    if [ -f "$patch" ]; then
+        patch_name=$(basename "$patch")
+        echo ">>> Applying opentui patch: $patch_name..."
+        if git apply --check "$patch" 2>/dev/null; then
+            git apply "$patch"
+            echo "    $patch_name applied successfully"
+        else
+            echo "    ERROR: $patch_name does not apply cleanly"
+            exit 1
+        fi
     fi
-fi
+done
 
 OPENTUI_ZIG_DIR="$OPENTUI_SRC/packages/core/src/zig"
 
