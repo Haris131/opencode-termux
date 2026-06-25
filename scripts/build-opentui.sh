@@ -67,7 +67,13 @@ if [ ! -f "$OPENTUI_ZIG_DIR/build.zig" ]; then
     exit 1
 fi
 
-echo ">>> Building with Zig (target: aarch64-linux-android)..."
+echo ">>> Building with Zig (target: aarch64-linux-android.29)..."
+
+# Ensure ANDROID_API is at least 29 (Zig's requiresLibC returns false for API >= 29,
+# preventing the libc provision error in Config.resolve)
+if [ "${ANDROID_API:-24}" -lt 29 ]; then
+    export ANDROID_API=29
+fi
 
 # Ensure both NDK env vars are set for Zig's native NDK auto-detection
 export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
@@ -75,7 +81,7 @@ export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
 cd "$OPENTUI_ZIG_DIR"
 
 "$ZIG_BIN" build \
-    -Dtarget=aarch64-linux-android \
+    -Dtarget=aarch64-linux-android.29 \
     -Doptimize=ReleaseFast \
     --prefix . 2>&1
 
