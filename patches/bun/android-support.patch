@@ -44,16 +44,14 @@ index 0000000..5fdd859
 +#endif
 +
 +static void disable_tagged_addresses(void) {
-+    // Disable ARM64 Top-Byte-Ignore (TBI) / pointer tagging.
-+    // Android 11+ enables TBI by default for app processes, which means
-+    // the kernel ignores the top byte of the address in syscalls. Bun's
-+    // JSC (JavaScriptCore) uses pointer tagging internally with JSCell
-+    // header bits in the top byte. If TBI is enabled, the kernel strips
-+    // those bits, causing JSC to misinterpret cell types and crash.
++    // Keep ARM64 Top-Byte-Ignore (TBI) / pointer tagging enabled.
++    // Android 11+ enables TBI by default for app processes. Bun's
++    // JSC uses pointer tagging internally with JSCell header bits in
++    // the top byte. If TBI is disabled, tagged pointers passed to
++    // syscalls (e.g. read(/proc/self/stat)) get EFAULT.
 +    //
-+    // PR_SET_TAGGED_ADDR_CTRL with PR_TAGGED_ADDR_ENABLE=0 disables TBI.
-+    // This is a per-process setting inherited by child threads.
-+    prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
++    // PR_SET_TAGGED_ADDR_CTRL with PR_TAGGED_ADDR_ENABLE=1 enables TBI.
++    prctl(PR_SET_TAGGED_ADDR_CTRL, PR_TAGGED_ADDR_ENABLE, 0, 0, 0);
 +}
 +
 +static void disable_heap_tagging(void) {
@@ -62,11 +60,10 @@ index 0000000..5fdd859
 +    // it on every load/store. This conflicts with JSC's pointer tagging
 +    // scheme. Disable MTE early before JSC allocates any memory.
 +    //
-+    // PR_SET_TAGGED_ADDR_CTRL with PR_MTE_TCF_NONE disables MTE.
-+    // We don't use PR_TAGGED_ADDR_ENABLE here because the kernel may
-+    // have already enabled TBI by default; we just need MTE off.
++    // PR_TAGGED_ADDR_ENABLE must remain set so TBI stays on and tagged
++    // pointers work with syscalls. Only clear MTE via PR_MTE_TCF_NONE.
 +    prctl(PR_SET_TAGGED_ADDR_CTRL,
-+          PR_MTE_TCF_NONE,
++          PR_TAGGED_ADDR_ENABLE | PR_MTE_TCF_NONE,
 +          0,
 +          PR_MTE_TAG_MASK,
 +          0);

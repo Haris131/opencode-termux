@@ -6,7 +6,7 @@ on:
       opencode_version:
         description: 'OpenCode version to build'
         required: false
-        default: '1.17.9'
+        default: '1.17.10'
       commit_sha:
         description: 'Commit hash or branch name'
         required: false
@@ -19,12 +19,12 @@ on:
 env:
   BUN_VERSION: "1.3.14"
   HOST_BUN_VERSION: "1.3.14"
-  OPENCODE_VERSION: "1.17.9"
+  OPENCODE_VERSION: "1.17.10"
   ANDROID_API: "24"
   ANDROID_NDK_VERSION: "28.1.13356709"
   WEBKIT_COMMIT: "017930ebf915121f8f593bef61cbbca82d78132d"
   TINYCC_COMMIT: "b91835d8701523e895a2b447713630069514e291"
-  OPENTUI_COMMIT: "9b216a58d974704ae638b3043aece2eb70b5ff19"
+  OPENTUI_COMMIT: "3e2d0aabeb47923f05adc6f1052401367cfde3d4"
   ICU_VERSION: "75.1"
   ZIG_VERSION: "0.15.2"
   # golem10 has 15GB RAM — limit parallelism to avoid OOM during WebKit link
@@ -147,7 +147,7 @@ jobs:
 
       - name: Install Bun (host, pinned for module graph compatibility)
         run: |
-          # Host Bun must support OpenCode v1.17.9's bun.lock format (v1) and
+          # Host Bun must support OpenCode v1.17.10's bun.lock format (v1) and
           # produce a module graph format compatible with the Android Bun's
           # patched StandaloneModuleGraph (52-byte stride).
           HOST_BUN_VERSION="$HOST_BUN_VERSION"
@@ -214,6 +214,21 @@ jobs:
           file "$BUN_BINARY"
           readelf -h "$BUN_BINARY" | grep -E "Machine|Class"
 
+      - name: Strip Bun binary
+        run: |
+          BUN_BINARY="${WORK_DIR}/bun-build/bun"
+          NDK_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          if [ -x "$NDK_STRIP" ]; then
+            echo "Before stripping:"
+            ls -lh "$BUN_BINARY"
+            cp "$BUN_BINARY" "${BUN_BINARY}.unstripped"
+            $NDK_STRIP "$BUN_BINARY"
+            echo "After stripping:"
+            ls -lh "$BUN_BINARY"
+          else
+            echo "WARNING: llvm-strip not found, skipping strip"
+          fi
+
       # =============================================
       # Build libopentui.so
       # =============================================
@@ -230,13 +245,24 @@ jobs:
           source scripts/env.sh
           ./scripts/build-opencode.sh
 
-      - name: Verify OpenCode binary
+      - name: Verify and strip OpenCode binary
         run: |
           OPENCODE_BINARY="${WORK_DIR}/dist/opencode"
           echo "OpenCode binary: $OPENCODE_BINARY"
           ls -lh "$OPENCODE_BINARY"
           file "$OPENCODE_BINARY"
           readelf -h "$OPENCODE_BINARY" | grep -E "Machine|Class"
+          NDK_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          if [ -x "$NDK_STRIP" ]; then
+            echo "Before stripping:"
+            ls -lh "$OPENCODE_BINARY"
+            cp "$OPENCODE_BINARY" "${OPENCODE_BINARY}.unstripped"
+            $NDK_STRIP "$OPENCODE_BINARY"
+            echo "After stripping:"
+            ls -lh "$OPENCODE_BINARY"
+          else
+            echo "WARNING: llvm-strip not found, skipping strip"
+          fi
 
       # =============================================
       # Create packages
