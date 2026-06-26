@@ -1,13 +1,11 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..5e057ea 100644
+index 0c82ba3..33c9083 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
-@@ -127,7 +127,25 @@ fn resolveMacOSSDKPath(b: *std.Build) ?[]const u8 {
-     return null;
+@@ -134,6 +134,24 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
+     );
  }
  
--fn printMissingMacOSSDK(target_description: []const u8) void {
-+fn
 +fn addAndroidNdkPaths(b: *std.Build, artifact: *std.Build.Step.Compile) void {
 +    const ndk_home = b.graph.env_map.get("ANDROID_NDK_HOME") orelse
 +        @panic("ANDROID_NDK_HOME must be set for Android builds");
@@ -25,10 +23,10 @@ index 0c82ba3..5e057ea 100644
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libm.so", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libc++_shared.so", .{ndk_lib}) });
 +}
-+printMissingMacOSSDK(target_description: []const u8) void {
-     std.debug.print(
-         "macOS SDK not found for {s}. Set SDKROOT, MACOS_SDK_PATH, or -Dmacos-sdk=/path/to/MacOSX.sdk.\n",
-         .{target_description},
++
+ fn addMiniaudioShim(
+     b: *std.Build,
+     artifact: *std.Build.Step.Compile,
 @@ -141,6 +159,15 @@ fn addMiniaudioShim(
      macos_sdk_path: ?[]const u8,
  ) void {
