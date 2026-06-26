@@ -69,6 +69,16 @@ fi
 
 echo ">>> Building with Zig (target: aarch64-linux-android.29)..."
 
+# Diagnostic: check NDK C++ headers location
+echo ">>> Checking NDK C++ headers..."
+NDK_TC="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
+for p in "$NDK_TC/include/c++/v1" "$NDK_TC/include/c++" "$NDK_TC/sysroot/usr/include/c++/v1"; do
+    if [ -f "$p/type_traits" ]; then
+        echo "    Found type_traits at: $p/type_traits"
+    fi
+done
+find "$NDK_TC" -name "type_traits" -maxdepth 6 2>/dev/null | head -5 || true
+
 # Ensure ANDROID_API is at least 29 (Zig's requiresLibC returns false for API >= 29,
 # preventing the libc provision error in Config.resolve)
 if [ "${ANDROID_API:-24}" -lt 29 ]; then
