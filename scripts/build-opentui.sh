@@ -98,7 +98,7 @@ cd "$OPENTUI_ZIG_DIR"
 # The build.zig installs to dest_dir="../lib/{output_name}" relative to
 # the --prefix dir.  With --prefix=. (= OPENTUI_ZIG_DIR), the .so ends
 # up one directory above: packages/core/src/lib/aarch64-linux-android/
-LIBOPENTUI="$OPENTUI_ZIG_DIR/../lib/aarch64-linux-android/libopentui.so"
+LIBOPENTUI="$OPENTUI_ZIG_DIR/../lib/aarch64-linux-android.29/libopentui.so"
 if [ ! -f "$LIBOPENTUI" ]; then
     echo "ERROR: libopentui.so not found"
     echo "  Expected at: $LIBOPENTUI"
