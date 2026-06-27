@@ -341,7 +341,7 @@ const newEntryOff = origRelaCount * RELA_ENTRY_SIZE;
 new DataView(relaBytes.buffer, relaBytes.byteOffset + newEntryOff, 8)
   .setBigUint64(0, BigInt(bunSectionFileOffset), true);
 new DataView(relaBytes.buffer, relaBytes.byteOffset + newEntryOff + 8, 8)
-  .setBigUint64(0, BigInt(R_AARCH64_RELATIVE) << 32n, true);
+  .setBigUint64(0, BigInt(R_AARCH64_RELATIVE), true);
 new DataView(relaBytes.buffer, relaBytes.byteOffset + newEntryOff + 16, 8)
   .setBigUint64(0, BigInt(newVaddr), true);
 
