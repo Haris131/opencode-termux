@@ -182,24 +182,71 @@ if (undiciPatchCount === 0) {
 var finalModuleGraph = mgBuf.slice(0, trailerPosInMg + mgTrailerBuf.length)
 console.log(`Module graph size: ${finalModuleGraph.length} bytes (unchanged)`)
 
-// Step 4: Create Android standalone binary
-console.log("\n=== Step 4: Creating Android standalone binary ===")
+// Step 4: Embed module graph into Android Bun's ELF .bun section
+// Bun v1.3.x reads standalone module graphs from the .bun ELF section,
+// NOT from appended data at end of file.
+console.log("\n=== Step 4: Embedding module graph into ELF .bun section ===")
 
 const androidBunBytes = new Uint8Array(await Bun.file(ANDROID_BUN).arrayBuffer())
 const androidBunSize = androidBunBytes.length
+const bunCopy = androidBunBytes.slice()
 console.log(`Android bun size: ${androidBunSize}`)
 
-const newTotalByteCount = finalModuleGraph.length + 8
+// Parse ELF header to find section header table
+const ev = new DataView(bunCopy.buffer, bunCopy.byteOffset, bunCopy.byteLength)
+const e_shoff = Number(ev.getBigUint64(0x28, true))
+const e_shentsize = ev.getUint16(0x3A, true)
+const e_shnum = ev.getUint16(0x3C, true)
+const e_shstrndx = ev.getUint16(0x3E, true)
 
-const outputSize = androidBunSize + finalModuleGraph.length + 8
+// Read section name string table (.shstrtab)
+const shstrHdr = e_shoff + e_shstrndx * e_shentsize
+const shstrOff = Number(ev.getBigUint64(shstrHdr + 0x18, true))
+const shstrSz  = Number(ev.getBigUint64(shstrHdr + 0x20, true))
+
+// Find .bun section header
+let bunSectionOffset = -1
+for (let i = 0; i < e_shnum; i++) {
+  const off = e_shoff + i * e_shentsize
+  const nameOff = ev.getUint32(off, true)
+  let name = ""
+  for (let j = shstrOff + nameOff; j < shstrOff + shstrSz && bunCopy[j] !== 0; j++) name += String.fromCharCode(bunCopy[j])
+  if (name === ".bun") {
+    bunSectionOffset = off
+    break
+  }
+}
+if (bunSectionOffset < 0) throw new Error(".bun section not found in Android Bun binary")
+
+const origBunOffset = Number(ev.getBigUint64(bunSectionOffset + 0x18, true))
+const origBunSize   = Number(ev.getBigUint64(bunSectionOffset + 0x20, true))
+const origBunAddr   = Number(ev.getBigUint64(bunSectionOffset + 0x10, true))
+const bunAddralign  = Number(ev.getBigUint64(bunSectionOffset + 0x30, true))
+
+console.log(`Found .bun section header at file offset ${bunSectionOffset}`)
+console.log(`  Original offset: 0x${origBunOffset.toString(16)}, size: 0x${origBunSize.toString(16)}`)
+console.log(`  Virtual address: 0x${origBunAddr.toString(16)}, alignment: ${bunAddralign}`)
+
+// New .bun section location: aligned past the end of the binary
+const newBunOffset = Math.ceil(androidBunSize / bunAddralign) * bunAddralign
+const newBunSize = 8 + finalModuleGraph.length  // 8-byte payload_len prefix + payload
+console.log(`  New offset: ${newBunOffset}, size: ${newBunSize}`)
+
+// Update section header: sh_offset and sh_size
+const shOffView = new DataView(bunCopy.buffer, bunCopy.byteOffset + bunSectionOffset + 0x18, 8)
+shOffView.setBigUint64(0, BigInt(newBunOffset), true)
+const shSizeView = new DataView(bunCopy.buffer, bunCopy.byteOffset + bunSectionOffset + 0x20, 8)
+shSizeView.setBigUint64(0, BigInt(newBunSize), true)
+
+// Create output: updated binary + padding + .bun section data
+const outputSize = newBunOffset + newBunSize
 const output = new Uint8Array(outputSize)
+output.set(bunCopy, 0)  // Updated binary (with modified section header)
 
-output.set(androidBunBytes, 0)
-output.set(new Uint8Array(finalModuleGraph.buffer, finalModuleGraph.byteOffset, finalModuleGraph.length), androidBunSize)
-
-const totalView = new DataView(output.buffer, outputSize - 8, 8)
-totalView.setUint32(0, newTotalByteCount & 0xFFFFFFFF, true)
-totalView.setUint32(4, Math.floor(newTotalByteCount / 0x100000000), true)
+// Write .bun section: [u64 payload_len][module_graph_payload]
+const payloadLenView = new DataView(output.buffer, newBunOffset, 8)
+payloadLenView.setBigUint64(0, BigInt(finalModuleGraph.length), true)
+output.set(new Uint8Array(finalModuleGraph.buffer, finalModuleGraph.byteOffset, finalModuleGraph.length), newBunOffset + 8)
 
 const androidOutputPath = path.join(OUTPUT_DIR, "opencode")
 await Bun.write(androidOutputPath, output)
@@ -208,10 +255,12 @@ fs.chmodSync(androidOutputPath, 0o755)
 console.log(`\nAndroid standalone binary: ${androidOutputPath}`)
 console.log(`Size: ${(outputSize / 1024 / 1024).toFixed(1)} MB`)
 
+// Verify: read back and check the .bun section
 const verifyBytes = new Uint8Array(await Bun.file(androidOutputPath).arrayBuffer())
-const verifyView = new DataView(verifyBytes.buffer, verifyBytes.length - 8, 8)
-const verifyTotal = verifyView.getUint32(0, true) + verifyView.getUint32(4, true) * 0x100000000
-console.log(`Verification: total_byte_count=${verifyTotal}, file_size=${verifyBytes.length}, expected=${newTotalByteCount}, match=${verifyTotal === newTotalByteCount}`)
+const verifySectionOff = newBunOffset
+const verifyPayloadLen = Number(new DataView(verifyBytes.buffer, verifySectionOff, 8).getBigUint64(0, true))
+const verifyDataLen = verifyBytes.length - verifySectionOff - 8
+console.log(`Verification: payload_len=${verifyPayloadLen}, data_len=${verifyDataLen}, match=${verifyPayloadLen === verifyDataLen}`)
 
 const elfMagic = String.fromCharCode(verifyBytes[0], verifyBytes[1], verifyBytes[2], verifyBytes[3])
 console.log(`ELF magic: ${elfMagic === "\x7fELF" ? "OK" : "INVALID"}`)
