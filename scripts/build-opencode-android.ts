@@ -182,88 +182,180 @@ if (undiciPatchCount === 0) {
 var finalModuleGraph = mgBuf.slice(0, trailerPosInMg + mgTrailerBuf.length)
 console.log(`Module graph size: ${finalModuleGraph.length} bytes (unchanged)`)
 
-// Step 4: Embed module graph into Android Bun's ELF .bun section
-// Bun v1.3.x reads standalone module graphs from the .bun ELF section,
-// NOT from appended data at end of file.
-console.log("\n=== Step 4: Embedding module graph into ELF .bun section ===")
+function alignUp(v: number, a: number): number {
+  const mask = a - 1;
+  return (v + mask) & ~mask;
+}
 
-const androidBunBytes = new Uint8Array(await Bun.file(ANDROID_BUN).arrayBuffer())
-const androidBunSize = androidBunBytes.length
-const bunCopy = androidBunBytes.slice()
-console.log(`Android bun size: ${androidBunSize}`)
+// Step 4: Embed module graph into Android Bun ELF .bun section
+// Full implementation of Bun's elf.zig:writeBunSection() algorithm:
+//  1. Extend writable PT_LOAD to cover new data (kernel mmaps at exec)
+//  2. Write payload at page-aligned VA past all existing mappings
+//  3. Store new_vaddr at original BUN_COMPILED location for runtime deref
+//  4. Relocate section headers and non-ALLOC sections out of the way
+//  5. Update e_shoff, section headers, and PT_LOAD p_filesz/p_memsz
+console.log("\n=== Step 4: Embedding module graph into ELF .bun section ===");
 
-// Parse ELF header to find section header table
-const ev = new DataView(bunCopy.buffer, bunCopy.byteOffset, bunCopy.byteLength)
-const e_shoff = Number(ev.getBigUint64(0x28, true))
-const e_shentsize = ev.getUint16(0x3A, true)
-const e_shnum = ev.getUint16(0x3C, true)
-const e_shstrndx = ev.getUint16(0x3E, true)
+const androidBunBytes = new Uint8Array(await Bun.file(ANDROID_BUN).arrayBuffer());
+console.log(`Android bun size: ${androidBunBytes.length}`);
 
-// Read section name string table (.shstrtab)
-const shstrHdr = e_shoff + e_shstrndx * e_shentsize
-const shstrOff = Number(ev.getBigUint64(shstrHdr + 0x18, true))
-const shstrSz  = Number(ev.getBigUint64(shstrHdr + 0x20, true))
+const data = androidBunBytes.slice();
+const dv = new DataView(data.buffer);
 
-// Find .bun section header
-let bunSectionOffset = -1
+// --- ELF constants ---
+const SHT_ENTRY = 64;
+const PHT_ENTRY = 56;
+const PT_LOAD = 1;
+const PF_W = 2;
+const SHT_NOBITS = 8;
+
+// --- Parse ELF header ---
+const e_machine = dv.getUint16(0x12, true);
+const e_phoff = Number(dv.getBigUint64(0x20, true));
+const e_phnum = dv.getUint16(0x38, true);
+const e_shoff = Number(dv.getBigUint64(0x28, true));
+const e_shnum = dv.getUint16(0x3C, true);
+const e_shstrndx = dv.getUint16(0x3E, true);
+const page_size = e_machine === 0xB7 ? 0x10000 : 0x1000; // AARCH64 => 64KB
+
+// Parse .shstrtab to find .bun section by name
+const shstrHdr = e_shoff + e_shstrndx * SHT_ENTRY;
+const shstrOff = Number(dv.getBigUint64(shstrHdr + 0x18, true));
+const shstrSz = Number(dv.getBigUint64(shstrHdr + 0x20, true));
+
+let bunSectionFileOffset = 0;
+let bunSectionIndex = -1;
 for (let i = 0; i < e_shnum; i++) {
-  const off = e_shoff + i * e_shentsize
-  const nameOff = ev.getUint32(off, true)
-  let name = ""
-  for (let j = shstrOff + nameOff; j < shstrOff + shstrSz && bunCopy[j] !== 0; j++) name += String.fromCharCode(bunCopy[j])
+  const off = e_shoff + i * SHT_ENTRY;
+  const nameOff = dv.getUint32(off, true);
+  let name = "";
+  for (let j = shstrOff + nameOff; j < shstrOff + shstrSz && data[j] !== 0; j++)
+    name += String.fromCharCode(data[j]);
   if (name === ".bun") {
-    bunSectionOffset = off
-    break
+    bunSectionFileOffset = Number(dv.getBigUint64(off + 0x18, true));
+    bunSectionIndex = i;
+    console.log(`Found .bun section: offset=0x${bunSectionFileOffset.toString(16)}, index=${i}`);
+    break;
   }
 }
-if (bunSectionOffset < 0) throw new Error(".bun section not found in Android Bun binary")
+if (bunSectionIndex < 0) throw new Error(".bun section not found");
 
-const origBunOffset = Number(ev.getBigUint64(bunSectionOffset + 0x18, true))
-const origBunSize   = Number(ev.getBigUint64(bunSectionOffset + 0x20, true))
-const origBunAddr   = Number(ev.getBigUint64(bunSectionOffset + 0x10, true))
-const bunAddralign  = Number(ev.getBigUint64(bunSectionOffset + 0x30, true))
+// Parse program headers: find writable PT_LOAD and max_vaddr_end
+let rwIdx = -1, rwOff = 0, rwVA = 0, rwFilesz = 0, rwMemsz = 0;
+let maxVaddrEnd = 0;
+for (let i = 0; i < e_phnum; i++) {
+  const po = e_phoff + i * PHT_ENTRY;
+  const p_type = dv.getUint32(po, true);
+  if (p_type !== PT_LOAD) continue;
+  const p_flags = dv.getUint32(po + 4, true);
+  const p_offset = Number(dv.getBigUint64(po + 8, true));
+  const p_vaddr = Number(dv.getBigUint64(po + 0x10, true));
+  const p_memsz = Number(dv.getBigUint64(po + 0x28, true));
+  const vend = p_vaddr + p_memsz;
+  if (vend > maxVaddrEnd) maxVaddrEnd = vend;
+  if ((p_flags & PF_W) && rwIdx < 0) {
+    rwIdx = i;
+    rwOff = p_offset;
+    rwVA = p_vaddr;
+    rwFilesz = Number(dv.getBigUint64(po + 0x20, true));
+    rwMemsz = p_memsz;
+    console.log(`RW PT_LOAD[${i}]: off=0x${p_offset.toString(16)} va=0x${p_vaddr.toString(16)} filesz=0x${rwFilesz.toString(16)} memsz=0x${p_memsz.toString(16)}`);
+  }
+}
+if (rwIdx < 0) throw new Error("No writable PT_LOAD found");
+console.log(`max_vaddr_end = 0x${maxVaddrEnd.toString(16)}`);
 
-console.log(`Found .bun section header at file offset ${bunSectionOffset}`)
-console.log(`  Original offset: 0x${origBunOffset.toString(16)}, size: 0x${origBunSize.toString(16)}`)
-console.log(`  Virtual address: 0x${origBunAddr.toString(16)}, alignment: ${bunAddralign}`)
+// --- Calculate new data location ---
+const headerSize = 8;
+const newContentSize = headerSize + finalModuleGraph.length;
+const alignedNewSize = alignUp(newContentSize, page_size);
+const newVaddr = alignUp(maxVaddrEnd, page_size);
+const offsetInSeg = newVaddr - rwVA;
+const newFileOffset = rwOff + offsetInSeg;
+console.log(`new_vaddr=0x${newVaddr.toString(16)} new_file_offset=0x${newFileOffset.toString(16)} aligned_size=0x${alignedNewSize.toString(16)}`);
 
-// New .bun section location: aligned past the end of the binary
-const newBunOffset = Math.ceil(androidBunSize / bunAddralign) * bunAddralign
-const newBunSize = 8 + finalModuleGraph.length  // 8-byte payload_len prefix + payload
-console.log(`  New offset: ${newBunOffset}, size: ${newBunSize}`)
+// --- File boundaries ---
+const oldRwFileEnd = rwOff + rwFilesz;
+const oldFileSize = data.length;
+const moveSrcStart = oldRwFileEnd;
+const moveSrcEnd = oldFileSize;
+const movedTailSize = moveSrcEnd - moveSrcStart;
+const moveDstStart = newFileOffset + alignedNewSize;
+const moveDstEnd = moveDstStart + movedTailSize;
+const totalNewSize = moveDstEnd;
 
-// Update section header: sh_offset and sh_size
-const shOffView = new DataView(bunCopy.buffer, bunCopy.byteOffset + bunSectionOffset + 0x18, 8)
-shOffView.setBigUint64(0, BigInt(newBunOffset), true)
-const shSizeView = new DataView(bunCopy.buffer, bunCopy.byteOffset + bunSectionOffset + 0x20, 8)
-shSizeView.setBigUint64(0, BigInt(newBunSize), true)
+if (movedTailSize === 0) throw new Error("No tail to move — ELF has nothing past PT_LOAD filesz (broken binary)");
 
-// Create output: updated binary + padding + .bun section data
-const outputSize = newBunOffset + newBunSize
-const output = new Uint8Array(outputSize)
-output.set(bunCopy, 0)  // Updated binary (with modified section header)
+console.log(`old_rw_file_end=0x${oldRwFileEnd.toString(16)} tail=[0x${moveSrcStart.toString(16)},0x${moveSrcEnd.toString(16)})->[0x${moveDstStart.toString(16)},0x${moveDstEnd.toString(16)})`);
 
-// Write .bun section: [u64 payload_len][module_graph_payload]
-const payloadLenView = new DataView(output.buffer, newBunOffset, 8)
-payloadLenView.setBigUint64(0, BigInt(finalModuleGraph.length), true)
-output.set(new Uint8Array(finalModuleGraph.buffer, finalModuleGraph.byteOffset, finalModuleGraph.length), newBunOffset + 8)
+// --- Build output ---
+const output = new Uint8Array(totalNewSize);
+output.set(data, 0);
 
-const androidOutputPath = path.join(OUTPUT_DIR, "opencode")
-await Bun.write(androidOutputPath, output)
-fs.chmodSync(androidOutputPath, 0o755)
+// 1. Move tail (non-ALLOC sections + section header table) — uses memmove semantics
+output.copyWithin(moveDstStart, moveSrcStart, moveSrcEnd);
 
-console.log(`\nAndroid standalone binary: ${androidOutputPath}`)
-console.log(`Size: ${(outputSize / 1024 / 1024).toFixed(1)} MB`)
+// 2. Zero-fill the region that becomes file-backed inside the extended PT_LOAD
+output.fill(0, moveSrcStart, newFileOffset);
 
-// Verify: read back and check the .bun section
-const verifyBytes = new Uint8Array(await Bun.file(androidOutputPath).arrayBuffer())
-const verifySectionOff = newBunOffset
-const verifyPayloadLen = Number(new DataView(verifyBytes.buffer, verifySectionOff, 8).getBigUint64(0, true))
-const verifyDataLen = verifyBytes.length - verifySectionOff - 8
-console.log(`Verification: payload_len=${verifyPayloadLen}, data_len=${verifyDataLen}, match=${verifyPayloadLen === verifyDataLen}`)
+// 3. Write payload: [u64 LE size][data]
+new DataView(output.buffer, output.byteOffset + newFileOffset, 8)
+  .setBigUint64(0, BigInt(finalModuleGraph.length), true);
+output.set(
+  new Uint8Array(finalModuleGraph.buffer, finalModuleGraph.byteOffset, finalModuleGraph.length),
+  newFileOffset + 8,
+);
 
-const elfMagic = String.fromCharCode(verifyBytes[0], verifyBytes[1], verifyBytes[2], verifyBytes[3])
-console.log(`ELF magic: ${elfMagic === "\x7fELF" ? "OK" : "INVALID"}`)
+// 4. Zero-fill padding between payload end and relocated tail
+const payloadEnd = newFileOffset + newContentSize;
+if (moveDstStart > payloadEnd) output.fill(0, payloadEnd, moveDstStart);
 
-console.log("\n=== Build complete! ===")
-console.log(`Output: ${androidOutputPath}`)
+// 5. Write new_vaddr at ORIGINAL .bun section location (BUN_COMPILED pointer)
+new DataView(output.buffer, output.byteOffset + bunSectionFileOffset, 8)
+  .setBigUint64(0, BigInt(newVaddr), true);
+console.log(`Wrote new_vaddr at original .bun offset 0x${bunSectionFileOffset.toString(16)}`);
+
+// 6. Update e_shoff in ELF header
+const oldShdrOff = e_shoff;
+const newShdrOff = oldShdrOff + (moveDstStart - moveSrcStart);
+new DataView(output.buffer, 0x28, 8).setBigUint64(0, BigInt(newShdrOff), true);
+console.log(`e_shoff: 0x${oldShdrOff.toString(16)} -> 0x${newShdrOff.toString(16)}`);
+
+// 7. Update all section headers at their new location
+for (let i = 0; i < e_shnum; i++) {
+  const shdv = new DataView(output.buffer, output.byteOffset + newShdrOff + i * SHT_ENTRY, SHT_ENTRY);
+  const sh_type = shdv.getUint32(4, true);
+  const sh_off = Number(shdv.getBigUint64(0x18, true));
+
+  if (i === bunSectionIndex) {
+    shdv.setBigUint64(0x18, BigInt(newFileOffset), true); // sh_offset
+    shdv.setBigUint64(0x20, BigInt(newContentSize), true); // sh_size
+    shdv.setBigUint64(0x10, BigInt(newVaddr), true);      // sh_addr
+  } else if (sh_type !== SHT_NOBITS && sh_off >= moveSrcStart && sh_off < moveSrcEnd) {
+    shdv.setBigUint64(0x18, BigInt(sh_off + (moveDstStart - moveSrcStart)), true);
+  }
+}
+
+// 8. Extend writable PT_LOAD: p_filesz and p_memsz
+const newSegSize = offsetInSeg + alignedNewSize;
+const phdrDV = new DataView(output.buffer, output.byteOffset + e_phoff + rwIdx * PHT_ENTRY, PHT_ENTRY);
+phdrDV.setBigUint64(0x20, BigInt(newSegSize), true); // p_filesz
+phdrDV.setBigUint64(0x28, BigInt(newSegSize), true); // p_memsz
+console.log(`PT_LOAD extended: filesz/memsz = 0x${newSegSize.toString(16)}`);
+
+// --- Write output ---
+const androidOutputPath = path.join(OUTPUT_DIR, "opencode");
+await Bun.write(androidOutputPath, output);
+fs.chmodSync(androidOutputPath, 0o755);
+
+console.log(`\nAndroid standalone binary: ${androidOutputPath}`);
+console.log(`Size: ${(output.length / 1024 / 1024).toFixed(1)} MB`);
+
+// --- Verification ---
+const elfMagic = String.fromCharCode(output[0], output[1], output[2], output[3]);
+console.log(`ELF magic: ${elfMagic === "\x7fELF" ? "OK" : "INVALID"}`);
+const verifyLen = Number(new DataView(output.buffer, output.byteOffset + newFileOffset, 8).getBigUint64(0, true));
+console.log(`Module graph at new offset: ${verifyLen} bytes (expected: ${finalModuleGraph.length})`);
+
+console.log("\n=== Build complete! ===");
+console.log(`Output: ${androidOutputPath}`);
