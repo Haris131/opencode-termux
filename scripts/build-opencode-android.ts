@@ -310,18 +310,87 @@ output.set(
 const payloadEnd = newFileOffset + newContentSize;
 if (moveDstStart > payloadEnd) output.fill(0, payloadEnd, moveDstStart);
 
-// 5. Write new_vaddr at ORIGINAL .bun section location (BUN_COMPILED pointer)
+// 5. Add R_AARCH64_RELATIVE relocation for BUN_COMPILED.size (PIE fixup)
+// The Android Bun binary is PIE (ET_DYN). At runtime, load_base is random.
+// The dynamic linker processes this RELATIVE relocation to write:
+//   BUN_COMPILED.size = load_base + new_vaddr
+// The runtime reads BUN_COMPILED.size as an absolute pointer → correct for PIE.
+//
+// We copy the original .rela.dyn table (52 entries) + our new entry into the
+// zero-filled gap (which is in the extended RW PT_LOAD), then update DT_RELA
+// and DT_RELASZ in the dynamic section to point to the new table.
+const R_AARCH64_RELATIVE = 1027;
+const RELA_ENTRY_SIZE = 24;
+
+// Read original RELA table from first PT_LOAD
+const origRelaOff = 0xd350;
+const origRelaCount = 52; // 1248 / 24
+const relaBytes = new Uint8Array((origRelaCount + 1) * RELA_ENTRY_SIZE);
+const origRelaView = new DataView(data.buffer, data.byteOffset + origRelaOff);
+for (let i = 0; i < origRelaCount; i++) {
+  const srcOff = i * RELA_ENTRY_SIZE;
+  new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff, RELA_ENTRY_SIZE)
+    .setBigUint64(0, origRelaView.getBigUint64(srcOff, true), true);
+  new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff + 8, RELA_ENTRY_SIZE - 8)
+    .setBigUint64(0, origRelaView.getBigUint64(srcOff + 8, true), true);
+  new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff + 16, RELA_ENTRY_SIZE - 16)
+    .setBigUint64(0, origRelaView.getBigUint64(srcOff + 16, true), true);
+}
+// Append new RELATIVE entry: r_offset=original_sh_addr, r_info=RELATIVE, r_addend=new_vaddr
+const newEntryOff = origRelaCount * RELA_ENTRY_SIZE;
+new DataView(relaBytes.buffer, relaBytes.byteOffset + newEntryOff, 8)
+  .setBigUint64(0, BigInt(bunSectionFileOffset), true);
+new DataView(relaBytes.buffer, relaBytes.byteOffset + newEntryOff + 8, 8)
+  .setBigUint64(0, BigInt(R_AARCH64_RELATIVE) << 32n, true);
+new DataView(relaBytes.buffer, relaBytes.byteOffset + newEntryOff + 16, 8)
+  .setBigUint64(0, BigInt(newVaddr), true);
+
+// Place new RELA table in the zero-filled gap (between oldRwFileEnd and newFileOffset)
+// Align to 8 bytes within the gap
+const relaTableFileOff = Math.min(
+  Math.ceil(oldRwFileEnd / 8) * 8,
+  newFileOffset - relaBytes.length,
+);
+if (relaTableFileOff + relaBytes.length > newFileOffset) {
+  throw new Error("Zero-filled gap too small for RELA table — need " + relaBytes.length + " bytes, gap is " + (newFileOffset - oldRwFileEnd));
+}
+output.set(relaBytes, relaTableFileOff);
+const relaTableVaddr = relaTableFileOff; // p_offset == p_vaddr for RW PT_LOAD
+console.log(`RELA table: ${origRelaCount}+1 entries at file offset 0x${relaTableFileOff.toString(16)} (vaddr 0x${relaTableVaddr.toString(16)})`);
+
+// Update DT_RELA (tag=7) and DT_RELASZ (tag=8) in dynamic section at 0x56f0000
+const dynSectionOff = 0x56f0000;
+const dynCount = 29;
+for (let i = 0; i < dynCount; i++) {
+  const entryOff = dynSectionOff + i * 16;
+  const tag = Number(new DataView(output.buffer, output.byteOffset + entryOff, 8).getBigUint64(0, true));
+  if (tag === 7) {
+    // DT_RELA: update pointer
+    new DataView(output.buffer, output.byteOffset + entryOff + 8, 8)
+      .setBigUint64(0, BigInt(relaTableVaddr), true);
+    console.log(`DT_RELA: 0xd350 -> 0x${relaTableVaddr.toString(16)}`);
+  } else if (tag === 8) {
+    // DT_RELASZ: update size (1248 -> 1272)
+    new DataView(output.buffer, output.byteOffset + entryOff + 8, 8)
+      .setBigUint64(0, BigInt(relaBytes.length), true);
+    console.log(`DT_RELASZ: 0x${(origRelaCount * RELA_ENTRY_SIZE).toString(16)} -> 0x${relaBytes.length.toString(16)}`);
+  }
+}
+
+// 6. Write new_vaddr at ORIGINAL .bun section location (BUN_COMPILED pointer)
+// For PIE, the dynamic linker RELATIVE relocation will add load_base at runtime.
+// The value we store now serves as the addend (relative vaddr of payload).
 new DataView(output.buffer, output.byteOffset + bunSectionFileOffset, 8)
   .setBigUint64(0, BigInt(newVaddr), true);
 console.log(`Wrote new_vaddr at original .bun offset 0x${bunSectionFileOffset.toString(16)}`);
 
-// 6. Update e_shoff in ELF header
+// 7. Update e_shoff in ELF header
 const oldShdrOff = e_shoff;
 const newShdrOff = oldShdrOff + (moveDstStart - moveSrcStart);
 new DataView(output.buffer, 0x28, 8).setBigUint64(0, BigInt(newShdrOff), true);
 console.log(`e_shoff: 0x${oldShdrOff.toString(16)} -> 0x${newShdrOff.toString(16)}`);
 
-// 7. Update all section headers at their new location
+// 8. Update all section headers at their new location
 for (let i = 0; i < e_shnum; i++) {
   const shdv = new DataView(output.buffer, output.byteOffset + newShdrOff + i * SHT_ENTRY, SHT_ENTRY);
   const sh_type = shdv.getUint32(4, true);
@@ -336,7 +405,7 @@ for (let i = 0; i < e_shnum; i++) {
   }
 }
 
-// 8. Extend writable PT_LOAD: p_filesz and p_memsz
+// 9. Extend writable PT_LOAD: p_filesz and p_memsz
 const newSegSize = offsetInSeg + alignedNewSize;
 const phdrDV = new DataView(output.buffer, output.byteOffset + e_phoff + rwIdx * PHT_ENTRY, PHT_ENTRY);
 phdrDV.setBigUint64(0x20, BigInt(newSegSize), true); // p_filesz
