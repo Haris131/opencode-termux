@@ -245,24 +245,17 @@ jobs:
           source scripts/env.sh
           ./scripts/build-opencode.sh
 
-      - name: Verify and strip OpenCode binary
+      - name: Verify OpenCode binary
         run: |
           OPENCODE_BINARY="${WORK_DIR}/dist/opencode"
           echo "OpenCode binary: $OPENCODE_BINARY"
           ls -lh "$OPENCODE_BINARY"
           file "$OPENCODE_BINARY"
           readelf -h "$OPENCODE_BINARY" | grep -E "Machine|Class"
-          NDK_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-          if [ -x "$NDK_STRIP" ]; then
-            echo "Before stripping:"
-            ls -lh "$OPENCODE_BINARY"
-            cp "$OPENCODE_BINARY" "${OPENCODE_BINARY}.unstripped"
-            $NDK_STRIP "$OPENCODE_BINARY"
-            echo "After stripping:"
-            ls -lh "$OPENCODE_BINARY"
-          else
-            echo "WARNING: llvm-strip not found, skipping strip"
-          fi
+          # NOTE: Do NOT strip the opencode binary.
+          # It is Bun + module graph appended after ELF sections.
+          # llvm-strip truncates the file at the end of the last ELF section,
+          # removing the module graph and breaking the standalone binary.
 
       # =============================================
       # Create packages
