@@ -189,7 +189,7 @@ const androidBunBytes = new Uint8Array(await Bun.file(ANDROID_BUN).arrayBuffer()
 const androidBunSize = androidBunBytes.length
 console.log(`Android bun size: ${androidBunSize}`)
 
-const newTotalByteCount = androidBunSize + finalModuleGraph.length + 8
+const newTotalByteCount = finalModuleGraph.length + 8
 
 const outputSize = androidBunSize + finalModuleGraph.length + 8
 const output = new Uint8Array(outputSize)
@@ -211,7 +211,7 @@ console.log(`Size: ${(outputSize / 1024 / 1024).toFixed(1)} MB`)
 const verifyBytes = new Uint8Array(await Bun.file(androidOutputPath).arrayBuffer())
 const verifyView = new DataView(verifyBytes.buffer, verifyBytes.length - 8, 8)
 const verifyTotal = verifyView.getUint32(0, true) + verifyView.getUint32(4, true) * 0x100000000
-console.log(`Verification: total_byte_count=${verifyTotal}, file_size=${verifyBytes.length}, match=${verifyTotal === verifyBytes.length}`)
+console.log(`Verification: total_byte_count=${verifyTotal}, file_size=${verifyBytes.length}, expected=${newTotalByteCount}, match=${verifyTotal === newTotalByteCount}`)
 
 const elfMagic = String.fromCharCode(verifyBytes[0], verifyBytes[1], verifyBytes[2], verifyBytes[3])
 console.log(`ELF magic: ${elfMagic === "\x7fELF" ? "OK" : "INVALID"}`)
