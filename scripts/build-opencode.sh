@@ -97,6 +97,32 @@ if [ -n "$OPENTUI_NODE_MODULE" ]; then
         echo ">>> Creating @opentui/core-linux-arm64 from @opentui/core-linux-x64..."
         mkdir -p "$(dirname "$OPENTUI_ARM64_DIR")"
         cp -a "$OPENTUI_X64_DIR" "$OPENTUI_ARM64_DIR"
+        # Fix package.json: update name and cpu field so Bun resolution finds it
+        ARM64_PKGJSON="$OPENTUI_ARM64_DIR/package.json"
+        if [ -f "$ARM64_PKGJSON" ]; then
+            # Replace name field
+            sed -i 's/"@opentui\/core-linux-x64"/"@opentui\/core-linux-arm64"/g' "$ARM64_PKGJSON"
+            # Replace cpu field: ["x64"] -> ["arm64"] or "x64" -> "arm64"
+            sed -i 's/"cpu":\["x64"\]/"cpu":["arm64"]/g' "$ARM64_PKGJSON"
+            sed -i 's/"cpu":"x64"/"cpu":"arm64"/g' "$ARM64_PKGJSON"
+            echo "    Fixed package.json name and cpu fields"
+        fi
+        # Create symlink in node_modules so Bun.build() can resolve it
+        # Determine the node_modules directory that has @opentui/core-linux-x64
+        if [[ "$OPENTUI_X64_DIR" == *"/node_modules/@opentui/core-linux-x64" ]]; then
+            X64_NM_DIR="${OPENTUI_X64_DIR%/node_modules/@opentui/core-linux-x64}/node_modules"
+            OPENTUI_ARM64_LINK="$X64_NM_DIR/@opentui/core-linux-arm64"
+            if [ ! -L "$OPENTUI_ARM64_LINK" ] && [ ! -d "$OPENTUI_ARM64_LINK" ]; then
+                mkdir -p "$X64_NM_DIR/@opentui"
+                if [[ "$OPENTUI_ARM64_DIR" == *"/.bun/"* ]]; then
+                    REL_TARGET=$(python3 -c "import os.path; print(os.path.relpath('$OPENTUI_ARM64_DIR', '$X64_NM_DIR/@opentui'))" 2>/dev/null || echo "../.bun/@opentui+core-linux-arm64@0.4.2/node_modules/@opentui/core-linux-arm64")
+                    ln -sf "$REL_TARGET" "$OPENTUI_ARM64_LINK"
+                else
+                    ln -sf "$OPENTUI_ARM64_DIR" "$OPENTUI_ARM64_LINK"
+                fi
+                echo "    Created symlink: $OPENTUI_ARM64_LINK -> $(readlink "$OPENTUI_ARM64_LINK")"
+            fi
+        fi
         echo "    Created $OPENTUI_ARM64_DIR"
     fi
 fi
@@ -133,6 +159,10 @@ fi
 if [ -n "${OPENTUI_ARM64_DIR:-}" ] && [ -d "$OPENTUI_ARM64_DIR" ]; then
     echo ">>> Cleaning up synthetic @opentui/core-linux-arm64..."
     rm -rf "$OPENTUI_ARM64_DIR"
+fi
+if [ -n "${OPENTUI_ARM64_LINK:-}" ] && [ -L "$OPENTUI_ARM64_LINK" ]; then
+    echo ">>> Removing symlink: $OPENTUI_ARM64_LINK..."
+    rm -f "$OPENTUI_ARM64_LINK"
 fi
 
 # Verify output
