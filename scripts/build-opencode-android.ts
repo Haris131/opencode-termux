@@ -66,7 +66,7 @@ const result = await Bun.build({
   define: {
     OPENCODE_VERSION: `'${VERSION}'`,
     OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
-    OPENCODE_WORKER_PATH: workerPath,
+    OPENCODE_WORKER_PATH: "./src/cli/tui/worker.js",
     OPENCODE_CHANNEL: `'${CHANNEL}'`,
     OPENCODE_LIBC: "",
   },
