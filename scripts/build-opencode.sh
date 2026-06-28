@@ -6,8 +6,9 @@
 # This script:
 # 1. Clones OpenCode if needed
 # 2. Swaps x86_64 libopentui.so with ARM64 version
-# 3. Runs the TypeScript build script to create the standalone binary
-# 4. Restores original libopentui.so
+# 3. Creates synthetic @opentui/core-linux-arm64 package for platform detection
+# 4. Runs the TypeScript build script to create the standalone binary
+# 5. Restores original libopentui.so and cleans up synthetic package
 #
 # Requires:
 # - Android Bun binary built (scripts/build-bun.sh)
@@ -84,6 +85,21 @@ else
     echo "         The build may embed the wrong architecture"
 fi
 
+# Create @opentui/core-linux-arm64 for ARM64 platform detection
+# @opentui/core's zig.ts does:
+#   if (process.arch === "arm64") return await import("@opentui/core-linux-arm64")
+# The ARM64 .so is swapped into @opentui/core-linux-x64 above, so we mirror
+# the entire package directory so Bun.build() embeds it for runtime resolution.
+if [ -n "$OPENTUI_NODE_MODULE" ]; then
+    OPENTUI_X64_DIR="$(dirname "$OPENTUI_NODE_MODULE")"
+    OPENTUI_ARM64_DIR="${OPENTUI_X64_DIR/linux-x64/linux-arm64}"
+    if [ ! -d "$OPENTUI_ARM64_DIR" ]; then
+        echo ">>> Creating @opentui/core-linux-arm64 from @opentui/core-linux-x64..."
+        cp -a "$OPENTUI_X64_DIR" "$OPENTUI_ARM64_DIR"
+        echo "    Created $OPENTUI_ARM64_DIR"
+    fi
+fi
+
 # Create dist directory
 mkdir -p "$DIST_DIR"
 
@@ -110,6 +126,12 @@ rm -f "$BUILD_SCRIPT_LOCAL"
 if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
     echo ">>> Restoring original x86_64 libopentui.so..."
     mv "$BACKUP_FILE" "$OPENTUI_NODE_MODULE"
+fi
+
+# Clean up synthetic @opentui/core-linux-arm64
+if [ -n "${OPENTUI_ARM64_DIR:-}" ] && [ -d "$OPENTUI_ARM64_DIR" ]; then
+    echo ">>> Cleaning up synthetic @opentui/core-linux-arm64..."
+    rm -rf "$OPENTUI_ARM64_DIR"
 fi
 
 # Verify output
