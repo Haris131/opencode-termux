@@ -92,9 +92,10 @@ fi
 # the entire package directory so Bun.build() embeds it for runtime resolution.
 if [ -n "$OPENTUI_NODE_MODULE" ]; then
     OPENTUI_X64_DIR="$(dirname "$OPENTUI_NODE_MODULE")"
-    OPENTUI_ARM64_DIR="${OPENTUI_X64_DIR/linux-x64/linux-arm64}"
+    OPENTUI_ARM64_DIR="${OPENTUI_X64_DIR//linux-x64/linux-arm64}"
     if [ ! -d "$OPENTUI_ARM64_DIR" ]; then
         echo ">>> Creating @opentui/core-linux-arm64 from @opentui/core-linux-x64..."
+        mkdir -p "$(dirname "$OPENTUI_ARM64_DIR")"
         cp -a "$OPENTUI_X64_DIR" "$OPENTUI_ARM64_DIR"
         echo "    Created $OPENTUI_ARM64_DIR"
     fi
