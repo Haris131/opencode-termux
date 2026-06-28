@@ -187,14 +187,13 @@ function alignUp(v: number, a: number): number {
   return (v + mask) & ~mask;
 }
 
-// Step 4: Embed module graph into Android Bun ELF .bun section
-// Full implementation of Bun's elf.zig:writeBunSection() algorithm:
-//  1. Extend writable PT_LOAD to cover new data (kernel mmaps at exec)
-//  2. Write payload at page-aligned VA past all existing mappings
-//  3. Store new_vaddr at original BUN_COMPILED location for runtime deref
-//  4. Relocate section headers and non-ALLOC sections out of the way
-//  5. Update e_shoff, section headers, and PT_LOAD p_filesz/p_memsz
-console.log("\n=== Step 4: Embedding module graph into ELF .bun section ===");
+// Step 4: Embed module graph as a separate PT_LOAD segment
+//
+// Instead of extending the existing RW PT_LOAD (which the kernel splits,
+// causing SIGBUS), we add a new PT_LOAD segment for the module graph data.
+// The program header table is relocated to a gap within the first LOAD segment
+// to accommodate the extra PHT entry.
+console.log("\n=== Step 4: Embedding module graph as separate PT_LOAD ===");
 
 const androidBunBytes = new Uint8Array(await Bun.file(ANDROID_BUN).arrayBuffer());
 console.log(`Android bun size: ${androidBunBytes.length}`);
@@ -207,7 +206,6 @@ const SHT_ENTRY = 64;
 const PHT_ENTRY = 56;
 const PT_LOAD = 1;
 const PF_W = 2;
-const SHT_NOBITS = 8;
 
 // --- Parse ELF header ---
 const e_machine = dv.getUint16(0x12, true);
@@ -217,6 +215,8 @@ const e_shoff = Number(dv.getBigUint64(0x28, true));
 const e_shnum = dv.getUint16(0x3C, true);
 const e_shstrndx = dv.getUint16(0x3E, true);
 const page_size = e_machine === 0xB7 ? 0x10000 : 0x1000; // AARCH64 => 64KB
+
+console.log(`ELF: e_phoff=0x${e_phoff.toString(16)} e_phnum=${e_phnum} e_shoff=0x${e_shoff.toString(16)} page_size=0x${page_size.toString(16)}`);
 
 // Parse .shstrtab to find .bun section by name
 const shstrHdr = e_shoff + e_shstrndx * SHT_ENTRY;
@@ -234,183 +234,151 @@ for (let i = 0; i < e_shnum; i++) {
   if (name === ".bun") {
     bunSectionFileOffset = Number(dv.getBigUint64(off + 0x18, true));
     bunSectionIndex = i;
-    console.log(`Found .bun section: offset=0x${bunSectionFileOffset.toString(16)}, index=${i}`);
+    console.log(`Found .bun section: file_offset=0x${bunSectionFileOffset.toString(16)}, index=${i}`);
     break;
   }
 }
 if (bunSectionIndex < 0) throw new Error(".bun section not found");
 
-// Parse program headers: find writable PT_LOAD and max_vaddr_end
-let rwIdx = -1, rwOff = 0, rwVA = 0, rwFilesz = 0, rwMemsz = 0;
+// Parse program headers: find max_vaddr_end
+let rwIdx = -1;
 let maxVaddrEnd = 0;
 for (let i = 0; i < e_phnum; i++) {
   const po = e_phoff + i * PHT_ENTRY;
   const p_type = dv.getUint32(po, true);
   if (p_type !== PT_LOAD) continue;
   const p_flags = dv.getUint32(po + 4, true);
-  const p_offset = Number(dv.getBigUint64(po + 8, true));
   const p_vaddr = Number(dv.getBigUint64(po + 0x10, true));
   const p_memsz = Number(dv.getBigUint64(po + 0x28, true));
   const vend = p_vaddr + p_memsz;
   if (vend > maxVaddrEnd) maxVaddrEnd = vend;
   if ((p_flags & PF_W) && rwIdx < 0) {
     rwIdx = i;
-    rwOff = p_offset;
-    rwVA = p_vaddr;
-    rwFilesz = Number(dv.getBigUint64(po + 0x20, true));
-    rwMemsz = p_memsz;
-    console.log(`RW PT_LOAD[${i}]: off=0x${p_offset.toString(16)} va=0x${p_vaddr.toString(16)} filesz=0x${rwFilesz.toString(16)} memsz=0x${p_memsz.toString(16)}`);
+    console.log(`RW PT_LOAD[${i}]: va=0x${p_vaddr.toString(16)} memsz=0x${p_memsz.toString(16)}`);
   }
 }
 if (rwIdx < 0) throw new Error("No writable PT_LOAD found");
 console.log(`max_vaddr_end = 0x${maxVaddrEnd.toString(16)}`);
 
-// --- Calculate new data location ---
+// --- Calculate new segment location ---
+// Segment layout: [RELA table (53 entries)] [padding] [u64 header] [module graph data] [padding to page]
 const headerSize = 8;
-const newContentSize = headerSize + finalModuleGraph.length;
-const alignedNewSize = alignUp(newContentSize, page_size);
-const newVaddr = alignUp(maxVaddrEnd, page_size);
-const offsetInSeg = newVaddr - rwVA;
-const newFileOffset = rwOff + offsetInSeg;
-console.log(`new_vaddr=0x${newVaddr.toString(16)} new_file_offset=0x${newFileOffset.toString(16)} aligned_size=0x${alignedNewSize.toString(16)}`);
-
-// --- File boundaries ---
-const oldRwFileEnd = rwOff + rwFilesz;
-const oldFileSize = data.length;
-const moveSrcStart = oldRwFileEnd;
-const moveSrcEnd = oldFileSize;
-const movedTailSize = moveSrcEnd - moveSrcStart;
-const moveDstStart = newFileOffset + alignedNewSize;
-const moveDstEnd = moveDstStart + movedTailSize;
-const totalNewSize = moveDstEnd;
-
-if (movedTailSize === 0) throw new Error("No tail to move — ELF has nothing past PT_LOAD filesz (broken binary)");
-
-console.log(`old_rw_file_end=0x${oldRwFileEnd.toString(16)} tail=[0x${moveSrcStart.toString(16)},0x${moveSrcEnd.toString(16)})->[0x${moveDstStart.toString(16)},0x${moveDstEnd.toString(16)})`);
-
-// --- Build output ---
-const output = new Uint8Array(totalNewSize);
-output.set(data, 0);
-
-// 1. Move tail (non-ALLOC sections + section header table) — uses memmove semantics
-output.copyWithin(moveDstStart, moveSrcStart, moveSrcEnd);
-
-// 2. Zero-fill the region that becomes file-backed inside the extended PT_LOAD
-output.fill(0, moveSrcStart, newFileOffset);
-
-// 3. Write payload: [u64 LE size][data]
-new DataView(output.buffer, output.byteOffset + newFileOffset, 8)
-  .setBigUint64(0, BigInt(finalModuleGraph.length), true);
-output.set(
-  new Uint8Array(finalModuleGraph.buffer, finalModuleGraph.byteOffset, finalModuleGraph.length),
-  newFileOffset + 8,
-);
-
-// 4. Zero-fill padding between payload end and relocated tail
-const payloadEnd = newFileOffset + newContentSize;
-if (moveDstStart > payloadEnd) output.fill(0, payloadEnd, moveDstStart);
-
-// 5. Add R_AARCH64_RELATIVE relocation for BUN_COMPILED.size (PIE fixup)
-// The Android Bun binary is PIE (ET_DYN). At runtime, load_base is random.
-// The dynamic linker processes this RELATIVE relocation to write:
-//   BUN_COMPILED.size = load_base + new_vaddr
-// The runtime reads BUN_COMPILED.size as an absolute pointer → correct for PIE.
-//
-// We copy the original .rela.dyn table (52 entries) + our new entry into the
-// zero-filled gap (which is in the extended RW PT_LOAD), then update DT_RELA
-// and DT_RELASZ in the dynamic section to point to the new table.
 const R_AARCH64_RELATIVE = 1027;
 const RELA_ENTRY_SIZE = 24;
 
-// Read original RELA table from first PT_LOAD
 const origRelaOff = 0xd350;
-const origRelaCount = 52; // 1248 / 24
-const relaBytes = new Uint8Array((origRelaCount + 1) * RELA_ENTRY_SIZE);
+const origRelaCount = 52;
+const newRelaCount = origRelaCount + 1;
+const relaBytes = new Uint8Array(newRelaCount * RELA_ENTRY_SIZE);
 const origRelaView = new DataView(data.buffer, data.byteOffset + origRelaOff);
 for (let i = 0; i < origRelaCount; i++) {
   const srcOff = i * RELA_ENTRY_SIZE;
-  new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff, RELA_ENTRY_SIZE)
+  new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff, 8)
     .setBigUint64(0, origRelaView.getBigUint64(srcOff, true), true);
-  new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff + 8, RELA_ENTRY_SIZE - 8)
+  new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff + 8, 8)
     .setBigUint64(0, origRelaView.getBigUint64(srcOff + 8, true), true);
-  new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff + 16, RELA_ENTRY_SIZE - 16)
+  new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff + 16, 8)
     .setBigUint64(0, origRelaView.getBigUint64(srcOff + 16, true), true);
 }
-// Append new RELATIVE entry: r_offset=original_sh_addr, r_info=RELATIVE, r_addend=new_vaddr
+
+const mgPayloadOff = alignUp(relaBytes.length, 8);
+const bunSectionSize = headerSize + finalModuleGraph.length;
+const segContentSize = mgPayloadOff + bunSectionSize;
+const alignedSegSize = alignUp(segContentSize, page_size);
+const newVaddr = alignUp(maxVaddrEnd, page_size);
+const newFileOffset = alignUp(data.length, page_size);
+console.log(`New segment: vaddr=0x${newVaddr.toString(16)} file_offset=0x${newFileOffset.toString(16)} seg_size=0x${alignedSegSize.toString(16)}`);
+
+// Append new RELATIVE entry: r_offset=bunSectionFileOffset, r_info=RELATIVE, r_addend=newVaddr+mgPayloadOff
 const newEntryOff = origRelaCount * RELA_ENTRY_SIZE;
 new DataView(relaBytes.buffer, relaBytes.byteOffset + newEntryOff, 8)
   .setBigUint64(0, BigInt(bunSectionFileOffset), true);
 new DataView(relaBytes.buffer, relaBytes.byteOffset + newEntryOff + 8, 8)
   .setBigUint64(0, BigInt(R_AARCH64_RELATIVE), true);
 new DataView(relaBytes.buffer, relaBytes.byteOffset + newEntryOff + 16, 8)
-  .setBigUint64(0, BigInt(newVaddr), true);
+  .setBigUint64(0, BigInt(newVaddr + mgPayloadOff), true);
 
-// Place new RELA table in the zero-filled gap (between oldRwFileEnd and newFileOffset)
-// Align to 8 bytes within the gap
-const relaTableFileOff = Math.min(
-  Math.ceil(oldRwFileEnd / 8) * 8,
-  newFileOffset - relaBytes.length,
+const segBuf = new Uint8Array(alignedSegSize);
+segBuf.set(relaBytes, 0);
+new DataView(segBuf.buffer, segBuf.byteOffset + mgPayloadOff, 8)
+  .setBigUint64(0, BigInt(finalModuleGraph.length), true);
+segBuf.set(
+  new Uint8Array(finalModuleGraph.buffer, finalModuleGraph.byteOffset, finalModuleGraph.length),
+  mgPayloadOff + 8,
 );
-if (relaTableFileOff + relaBytes.length > newFileOffset) {
-  throw new Error("Zero-filled gap too small for RELA table — need " + relaBytes.length + " bytes, gap is " + (newFileOffset - oldRwFileEnd));
-}
-output.set(relaBytes, relaTableFileOff);
-const relaTableVaddr = relaTableFileOff; // p_offset == p_vaddr for RW PT_LOAD
-console.log(`RELA table: ${origRelaCount}+1 entries at file offset 0x${relaTableFileOff.toString(16)} (vaddr 0x${relaTableVaddr.toString(16)})`);
+console.log(`Segment: RELA at +0x0 (${relaBytes.length}B), payload at +0x${mgPayloadOff.toString(16)} (${bunSectionSize}B), total=${alignedSegSize}B`);
 
-// Update DT_RELA (tag=7) and DT_RELASZ (tag=8) in dynamic section at 0x56f0000
+// --- Build output file ---
+const totalNewSize = newFileOffset + alignedSegSize;
+const output = new Uint8Array(totalNewSize);
+output.set(data, 0);
+output.set(segBuf, newFileOffset);
+
+// --- Relocate PHT to gap at 0x15480 (within first LOAD [0x0, 0x5545ec0)) ---
+// The gap between .rela.plt (ends at 0x15480) and .rodata (starts at 0x16000)
+// is 0xB80 = 2944 bytes — plenty of room for 9 PHT entries (504 bytes).
+const newPhtOff = 0x15480;
+const newPhtEntryCount = e_phnum + 1;
+
+for (let i = 0; i < e_phnum; i++) {
+  const srcOff = e_phoff + i * PHT_ENTRY;
+  output.set(data.slice(srcOff, srcOff + PHT_ENTRY), newPhtOff + i * PHT_ENTRY);
+}
+// Add new PT_LOAD entry
+const newPhtDV = new DataView(output.buffer, output.byteOffset + newPhtOff + e_phnum * PHT_ENTRY, PHT_ENTRY);
+newPhtDV.setUint32(0, PT_LOAD, true);
+newPhtDV.setUint32(4, 6, true); // PF_R | PF_W
+newPhtDV.setBigUint64(8, BigInt(newFileOffset), true);
+newPhtDV.setBigUint64(0x10, BigInt(newVaddr), true);
+newPhtDV.setBigUint64(0x18, BigInt(newVaddr), true);
+newPhtDV.setBigUint64(0x20, BigInt(alignedSegSize), true);
+newPhtDV.setBigUint64(0x28, BigInt(alignedSegSize), true);
+newPhtDV.setBigUint64(0x30, BigInt(page_size), true);
+
+// Update ELF header
+new DataView(output.buffer, 0x20, 8).setBigUint64(0, BigInt(newPhtOff), true);
+new DataView(output.buffer, 0x38, 2).setUint16(0, newPhtEntryCount, true);
+
+// Update PT_PHDR entry (PHT[0]) to reflect new PHT location
+const ptPhdrDV = new DataView(output.buffer, output.byteOffset + newPhtOff, PHT_ENTRY);
+ptPhdrDV.setBigUint64(8, BigInt(newPhtOff), true);
+ptPhdrDV.setBigUint64(0x10, BigInt(newPhtOff), true);
+ptPhdrDV.setBigUint64(0x20, BigInt(newPhtEntryCount * PHT_ENTRY), true);
+
+console.log(`PHT relocated: 0x${e_phoff.toString(16)} -> 0x${newPhtOff.toString(16)}, entries: ${e_phnum} -> ${newPhtEntryCount}`);
+
+// --- Update DT_RELA and DT_RELASZ in dynamic section at 0x56f0000 ---
 const dynSectionOff = 0x56f0000;
 const dynCount = 29;
 for (let i = 0; i < dynCount; i++) {
   const entryOff = dynSectionOff + i * 16;
   const tag = Number(new DataView(output.buffer, output.byteOffset + entryOff, 8).getBigUint64(0, true));
   if (tag === 7) {
-    // DT_RELA: update pointer
     new DataView(output.buffer, output.byteOffset + entryOff + 8, 8)
-      .setBigUint64(0, BigInt(relaTableVaddr), true);
-    console.log(`DT_RELA: 0xd350 -> 0x${relaTableVaddr.toString(16)}`);
+      .setBigUint64(0, BigInt(newVaddr), true);
+    console.log(`DT_RELA: 0xd350 -> 0x${newVaddr.toString(16)}`);
   } else if (tag === 8) {
-    // DT_RELASZ: update size (1248 -> 1272)
     new DataView(output.buffer, output.byteOffset + entryOff + 8, 8)
       .setBigUint64(0, BigInt(relaBytes.length), true);
     console.log(`DT_RELASZ: 0x${(origRelaCount * RELA_ENTRY_SIZE).toString(16)} -> 0x${relaBytes.length.toString(16)}`);
   }
 }
 
-// 6. Write new_vaddr at ORIGINAL .bun section location (BUN_COMPILED pointer)
-// For PIE, the dynamic linker RELATIVE relocation will add load_base at runtime.
-// The value we store now serves as the addend (relative vaddr of payload).
+// --- Write new_vaddr at ORIGINAL .bun section location (BUN_COMPILED pointer) ---
+// The dynamic linker RELATIVE relocation writes load_base + newVaddr + mgPayloadOff
+// to load_base + bunSectionFileOffset. The runtime reads this as an absolute pointer
+// to the module graph's u64 byte_count header.
 new DataView(output.buffer, output.byteOffset + bunSectionFileOffset, 8)
-  .setBigUint64(0, BigInt(newVaddr), true);
+  .setBigUint64(0, BigInt(newVaddr + mgPayloadOff), true);
 console.log(`Wrote new_vaddr at original .bun offset 0x${bunSectionFileOffset.toString(16)}`);
 
-// 7. Update e_shoff in ELF header
-const oldShdrOff = e_shoff;
-const newShdrOff = oldShdrOff + (moveDstStart - moveSrcStart);
-new DataView(output.buffer, 0x28, 8).setBigUint64(0, BigInt(newShdrOff), true);
-console.log(`e_shoff: 0x${oldShdrOff.toString(16)} -> 0x${newShdrOff.toString(16)}`);
-
-// 8. Update all section headers at their new location
-for (let i = 0; i < e_shnum; i++) {
-  const shdv = new DataView(output.buffer, output.byteOffset + newShdrOff + i * SHT_ENTRY, SHT_ENTRY);
-  const sh_type = shdv.getUint32(4, true);
-  const sh_off = Number(shdv.getBigUint64(0x18, true));
-
-  if (i === bunSectionIndex) {
-    shdv.setBigUint64(0x18, BigInt(newFileOffset), true); // sh_offset
-    shdv.setBigUint64(0x20, BigInt(newContentSize), true); // sh_size
-    shdv.setBigUint64(0x10, BigInt(newVaddr), true);      // sh_addr
-  } else if (sh_type !== SHT_NOBITS && sh_off >= moveSrcStart && sh_off < moveSrcEnd) {
-    shdv.setBigUint64(0x18, BigInt(sh_off + (moveDstStart - moveSrcStart)), true);
-  }
-}
-
-// 9. Extend writable PT_LOAD: p_filesz and p_memsz
-const newSegSize = offsetInSeg + alignedNewSize;
-const phdrDV = new DataView(output.buffer, output.byteOffset + e_phoff + rwIdx * PHT_ENTRY, PHT_ENTRY);
-phdrDV.setBigUint64(0x20, BigInt(newSegSize), true); // p_filesz
-phdrDV.setBigUint64(0x28, BigInt(newSegSize), true); // p_memsz
-console.log(`PT_LOAD extended: filesz/memsz = 0x${newSegSize.toString(16)}`);
+// --- Update .bun section header ---
+const bunShdrOff = e_shoff + bunSectionIndex * SHT_ENTRY;
+const bunsDV = new DataView(output.buffer, output.byteOffset + bunShdrOff, SHT_ENTRY);
+bunsDV.setBigUint64(0x18, BigInt(newFileOffset + mgPayloadOff), true); // sh_offset
+bunsDV.setBigUint64(0x20, BigInt(bunSectionSize), true);              // sh_size
+bunsDV.setBigUint64(0x10, BigInt(newVaddr + mgPayloadOff), true);    // sh_addr
+console.log(`Section .bun: offset=0x${(newFileOffset + mgPayloadOff).toString(16)} addr=0x${(newVaddr + mgPayloadOff).toString(16)} size=0x${bunSectionSize.toString(16)}`);
 
 // --- Write output ---
 const androidOutputPath = path.join(OUTPUT_DIR, "opencode");
@@ -423,8 +391,12 @@ console.log(`Size: ${(output.length / 1024 / 1024).toFixed(1)} MB`);
 // --- Verification ---
 const elfMagic = String.fromCharCode(output[0], output[1], output[2], output[3]);
 console.log(`ELF magic: ${elfMagic === "\x7fELF" ? "OK" : "INVALID"}`);
-const verifyLen = Number(new DataView(output.buffer, output.byteOffset + newFileOffset, 8).getBigUint64(0, true));
+const verifyLen = Number(new DataView(output.buffer, output.byteOffset + newFileOffset + mgPayloadOff, 8).getBigUint64(0, true));
 console.log(`Module graph at new offset: ${verifyLen} bytes (expected: ${finalModuleGraph.length})`);
+
+// Quick PHT sanity check
+const verifyPhnum = new DataView(output.buffer, 0x38, 2).getUint16(0, true);
+console.log(`e_phnum: ${verifyPhnum} (expected: ${newPhtEntryCount})`);
 
 console.log("\n=== Build complete! ===");
 console.log(`Output: ${androidOutputPath}`);
