@@ -283,6 +283,28 @@ jobs:
           source scripts/env.sh
           ./scripts/make-packages.sh
 
+      - name: Compress bun binaries with tar.xz
+        run: |
+          BUN_DIR="${WORK_DIR}/bun-build"
+          BUN_VERSION="${{ env.BUN_VERSION }}"
+          # Compress stripped bun
+          if [ -f "$BUN_DIR/bun" ]; then
+            cp "$BUN_DIR/bun" "$BUN_DIR/bun-${BUN_VERSION}-stripped"
+            tar -cJf "$BUN_DIR/bun-${BUN_VERSION}-stripped.tar.xz" -C "$BUN_DIR" "bun-${BUN_VERSION}-stripped" 2>/dev/null || \
+              xz -9 -T0 "$BUN_DIR/bun-${BUN_VERSION}-stripped"
+            rm -f "$BUN_DIR/bun-${BUN_VERSION}-stripped"
+            echo "Created: bun-${BUN_VERSION}-stripped.tar.xz"
+          fi
+          # Compress unstripped bun if exists
+          if [ -f "$BUN_DIR/bun.unstripped" ]; then
+            cp "$BUN_DIR/bun.unstripped" "$BUN_DIR/bun-${BUN_VERSION}-unstripped"
+            tar -cJf "$BUN_DIR/bun-${BUN_VERSION}-unstripped.tar.xz" -C "$BUN_DIR" "bun-${BUN_VERSION}-unstripped" 2>/dev/null || \
+              xz -9 -T0 "$BUN_DIR/bun-${BUN_VERSION}-unstripped"
+            rm -f "$BUN_DIR/bun-${BUN_VERSION}-unstripped"
+            echo "Created: bun-${BUN_VERSION}-unstripped.tar.xz"
+          fi
+          ls -lh "$BUN_DIR"/bun-*.tar.xz
+
       - name: List packages
         run: |
           echo "=== Built packages ==="
@@ -313,7 +335,7 @@ jobs:
             ${{ env.WORK_DIR }}/packages/*.zip
             ${{ env.WORK_DIR }}/packages/*.pkg.tar.xz
             ${{ env.WORK_DIR }}/packages/*.deb
-            ${{ env.WORK_DIR }}/bun-build/*
+            ${{ env.WORK_DIR }}/bun-build/bun-*.tar.xz
           body: |
             ## OpenCode ${{ env.OPENCODE_VERSION }} for Android/Termux (aarch64)
 

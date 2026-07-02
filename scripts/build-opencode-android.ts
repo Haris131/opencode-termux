@@ -260,17 +260,38 @@ for (let i = 0; i < e_phnum; i++) {
 if (rwIdx < 0) throw new Error("No writable PT_LOAD found");
 console.log(`max_vaddr_end = 0x${maxVaddrEnd.toString(16)}`);
 
+// --- Discover ELF layout: scan sections for .rela.dyn and .dynamic ---
+let relaDynOff = 0, relaDynSize = 0;
+let dynamicOff = 0;
+const sections2: Array<{name: string, offset: number, size: number, addr: number}> = [];
+for (let i = 0; i < e_shnum; i++) {
+  const off = e_shoff + i * SHT_ENTRY;
+  const nameOff = dv.getUint32(off, true);
+  let name = "";
+  for (let j = shstrOff + nameOff; j < shstrOff + shstrSz && data[j] !== 0; j++)
+    name += String.fromCharCode(data[j]);
+  const secOff = Number(dv.getBigUint64(off + 0x18, true));
+  const secSz = Number(dv.getBigUint64(off + 0x20, true));
+  const secAddr = Number(dv.getBigUint64(off + 0x10, true));
+  sections2.push({name, offset: secOff, size: secSz, addr: secAddr});
+  if (name === ".rela.dyn") { relaDynOff = secOff; relaDynSize = secSz; }
+  if (name === ".dynamic") { dynamicOff = secOff; }
+}
+if (!relaDynOff) throw new Error(".rela.dyn section not found");
+if (!dynamicOff) throw new Error(".dynamic section not found");
+console.log(`  .rela.dyn: offset=0x${relaDynOff.toString(16)} size=0x${relaDynSize.toString(16)}`);
+console.log(`  .dynamic:  offset=0x${dynamicOff.toString(16)}`);
+
 // --- Calculate new segment location ---
-// Segment layout: [RELA table (53 entries)] [padding] [u64 header] [module graph data] [padding to page]
+// Segment layout: [RELA table] [padding] [u64 header] [module graph data] [padding to page]
 const headerSize = 8;
 const R_AARCH64_RELATIVE = 1027;
 const RELA_ENTRY_SIZE = 24;
 
-const origRelaOff = 0xd350;
-const origRelaCount = 52;
+const origRelaCount = relaDynSize / RELA_ENTRY_SIZE;
 const newRelaCount = origRelaCount + 1;
 const relaBytes = new Uint8Array(newRelaCount * RELA_ENTRY_SIZE);
-const origRelaView = new DataView(data.buffer, data.byteOffset + origRelaOff);
+const origRelaView = new DataView(data.buffer, data.byteOffset + relaDynOff);
 for (let i = 0; i < origRelaCount; i++) {
   const srcOff = i * RELA_ENTRY_SIZE;
   new DataView(relaBytes.buffer, relaBytes.byteOffset + srcOff, 8)
@@ -314,12 +335,32 @@ const output = new Uint8Array(totalNewSize);
 output.set(data, 0);
 output.set(segBuf, newFileOffset);
 
-// --- Relocate PHT to gap at 0x15480 (within first LOAD [0x0, 0x5545ec0)) ---
-// The gap between .rela.plt (ends at 0x15480) and .rodata (starts at 0x16000)
-// is 0xB80 = 2944 bytes — plenty of room for 9 PHT entries (504 bytes).
-const newPhtOff = 0x15480;
-const newPhtEntryCount = e_phnum + 1;
+// --- Find a gap within the first LOAD segment for PHT relocation ---
+// Sort sections by offset to find gaps between consecutive sections
+const sortedSects = sections2
+  .filter(s => s.size > 0 && s.offset > 0)
+  .sort((a, b) => a.offset - b.offset);
+let newPhtOff = page_size; // default fallback
+const phtNeeded = (e_phnum + 1) * PHT_ENTRY;
+for (let i = 0; i < sortedSects.length - 1; i++) {
+  const gapStart = sortedSects[i].offset + sortedSects[i].size;
+  const gapEnd = sortedSects[i + 1].offset;
+  const gapSize = gapEnd - gapStart;
+  if (gapSize >= phtNeeded && gapEnd <= maxVaddrEnd) {
+    newPhtOff = gapStart;
+    console.log(`  Found gap: 0x${gapStart.toString(16)}-0x${gapEnd.toString(16)} (${gapSize} bytes) for PHT`);
+    break;
+  }
+}
+if (!newPhtOff || newPhtOff === page_size) {
+  // Fallback: place PHT after last section in first LOAD
+  console.log("  WARNING: No suitable gap found, appending PHT at end of first LOAD");
+  newPhtOff = sortedSects.filter(s => s.offset < maxVaddrEnd).pop()!.offset +
+              sortedSects.filter(s => s.offset < maxVaddrEnd).pop()!.size;
+  newPhtOff = alignUp(newPhtOff, 8);
+}
 
+const newPhtEntryCount = e_phnum + 1;
 for (let i = 0; i < e_phnum; i++) {
   const srcOff = e_phoff + i * PHT_ENTRY;
   output.set(data.slice(srcOff, srcOff + PHT_ENTRY), newPhtOff + i * PHT_ENTRY);
@@ -347,16 +388,16 @@ ptPhdrDV.setBigUint64(0x20, BigInt(newPhtEntryCount * PHT_ENTRY), true);
 
 console.log(`PHT relocated: 0x${e_phoff.toString(16)} -> 0x${newPhtOff.toString(16)}, entries: ${e_phnum} -> ${newPhtEntryCount}`);
 
-// --- Update DT_RELA and DT_RELASZ in dynamic section at 0x56f0000 ---
-const dynSectionOff = 0x56f0000;
-const dynCount = 29;
+// --- Update DT_RELA and DT_RELASZ in dynamic section (discovered offset) ---
+// Scan the .dynamic section for DT_RELA (tag 7) and DT_RELASZ (tag 8)
+const dynCount = 31;
 for (let i = 0; i < dynCount; i++) {
-  const entryOff = dynSectionOff + i * 16;
+  const entryOff = dynamicOff + i * 16;
   const tag = Number(new DataView(output.buffer, output.byteOffset + entryOff, 8).getBigUint64(0, true));
   if (tag === 7) {
     new DataView(output.buffer, output.byteOffset + entryOff + 8, 8)
       .setBigUint64(0, BigInt(newVaddr), true);
-    console.log(`DT_RELA: 0xd350 -> 0x${newVaddr.toString(16)}`);
+    console.log(`DT_RELA: 0x${relaDynOff.toString(16)} -> 0x${newVaddr.toString(16)}`);
   } else if (tag === 8) {
     new DataView(output.buffer, output.byteOffset + entryOff + 8, 8)
       .setBigUint64(0, BigInt(relaBytes.length), true);
