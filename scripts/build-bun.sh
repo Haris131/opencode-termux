@@ -48,6 +48,24 @@ else
     exit 1
 fi
 
+# Compile Android support C/asm files IMMEDIATELY after git apply, before
+# any other step that might remove them (git clean, configure, etc.).
+# These fix TLS alignment for Bionic (p_align >= 64) and disable MTE.
+echo ">>> Compiling Android support files (early)..."
+ANDROID_O_DIR_EARLY="$BUN_BUILD/android-early"
+mkdir -p "$ANDROID_O_DIR_EARLY"
+for srcfile in android_disable_tags.c android_tls_align.c; do
+    if [ -f "$BUN_SRC/src/$srcfile" ]; then
+        echo "    Compiling $srcfile..."
+        $ANDROID_CC -O2 -fPIC -c "$BUN_SRC/src/$srcfile" -o "$ANDROID_O_DIR_EARLY/${srcfile%.c}.o"
+    fi
+done
+if [ -f "$BUN_SRC/src/android_tls_align.s" ]; then
+    echo "    Assembling android_tls_align.s..."
+    $ANDROID_CC -O2 -fPIC -c "$BUN_SRC/src/android_tls_align.s" -o "$ANDROID_O_DIR_EARLY/android_tls_align.o"
+fi
+echo "    Early android support objects: $(ls $ANDROID_O_DIR_EARLY/*.o 2>/dev/null | wc -l) files"
+
 # Build TinyCC (libtcc.a) for Android — required by bun:ffi for dlopen() support
 echo ">>> Building TinyCC (libtcc.a) for Android..."
 "$SCRIPT_DIR/build-tinycc.sh"
@@ -101,20 +119,28 @@ echo "    Ninja build dir: $NINJA_DIR"
 # Compile Android support C/asm files and inject them into the link step
 # These fix TLS alignment (Bionic requires p_align >= 64) and disable MTE
 # (Memory Tagging Extension conflicts with JSC pointer tagging).
-echo ">>> Compiling Android support files..."
 ANDROID_O_DIR="$NINJA_DIR/android-support"
 mkdir -p "$ANDROID_O_DIR"
+ANDROID_O_FILES=""
 for srcfile in android_disable_tags.c android_tls_align.c; do
     if [ -f "$BUN_SRC/src/$srcfile" ]; then
         echo "    Compiling $srcfile..."
         $ANDROID_CC -O2 -fPIC -c "$BUN_SRC/src/$srcfile" -o "$ANDROID_O_DIR/${srcfile%.c}.o"
+        ANDROID_O_FILES="$ANDROID_O_FILES $ANDROID_O_DIR/${srcfile%.c}.o"
     fi
 done
 if [ -f "$BUN_SRC/src/android_tls_align.s" ]; then
     echo "    Assembling android_tls_align.s..."
     $ANDROID_CC -O2 -fPIC -c "$BUN_SRC/src/android_tls_align.s" -o "$ANDROID_O_DIR/android_tls_align.o"
+    ANDROID_O_FILES="$ANDROID_O_FILES $ANDROID_O_DIR/android_tls_align.o"
 fi
-echo "    Android support objects: $(ls $ANDROID_O_DIR/*.o 2>/dev/null | wc -l) files"
+# Fallback to early-compiled objects if source files were removed
+if [ -z "$ANDROID_O_FILES" ] && [ -d "$BUN_BUILD/android-early" ]; then
+    echo "    Source files not found, using early-compiled objects..."
+    ANDROID_O_DIR="$BUN_BUILD/android-early"
+    ANDROID_O_FILES=$(ls "$ANDROID_O_DIR"/*.o 2>/dev/null || true)
+fi
+echo "    Android support objects: $(echo "$ANDROID_O_FILES" | wc -w) files"
 
 # Inject prebuilt libtcc.a AND android support .o files into the link step
 # The configure step with --tinycc=prebuilt may not fully wire up the static lib
@@ -124,10 +150,7 @@ if [ -f "$LIBTCC_A" ]; then
     echo ">>> Injecting libtcc.a and android support objects into link step..."
     cd "$NINJA_DIR"
     # Collect all extra objects/libs to inject
-    EXTRA_LINKS="$LIBTCC_A"
-    for obj in "$ANDROID_O_DIR"/*.o; do
-        [ -f "$obj" ] && EXTRA_LINKS="$EXTRA_LINKS $obj"
-    done
+    EXTRA_LINKS="$LIBTCC_A $ANDROID_O_FILES"
     # Find the main bun binary link rule in build.ninja and append extra inputs.
     if grep -q "^build bun:" "$BUILD_NINJA" 2>/dev/null; then
         if ! grep -q "libtcc\\.a" "$BUILD_NINJA"; then
