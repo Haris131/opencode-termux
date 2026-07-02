@@ -98,31 +98,53 @@ fi
 NINJA_DIR=$(dirname "$BUILD_NINJA")
 echo "    Ninja build dir: $NINJA_DIR"
 
-# Inject prebuilt libtcc.a into the link step
+# Compile Android support C/asm files and inject them into the link step
+# These fix TLS alignment (Bionic requires p_align >= 64) and disable MTE
+# (Memory Tagging Extension conflicts with JSC pointer tagging).
+echo ">>> Compiling Android support files..."
+ANDROID_O_DIR="$NINJA_DIR/android-support"
+mkdir -p "$ANDROID_O_DIR"
+for srcfile in android_disable_tags.c android_tls_align.c; do
+    if [ -f "$BUN_SRC/src/$srcfile" ]; then
+        echo "    Compiling $srcfile..."
+        $ANDROID_CC -O2 -fPIC -c "$BUN_SRC/src/$srcfile" -o "$ANDROID_O_DIR/${srcfile%.c}.o"
+    fi
+done
+if [ -f "$BUN_SRC/src/android_tls_align.s" ]; then
+    echo "    Assembling android_tls_align.s..."
+    $ANDROID_CC -O2 -fPIC -c "$BUN_SRC/src/android_tls_align.s" -o "$ANDROID_O_DIR/android_tls_align.o"
+fi
+echo "    Android support objects: $(ls $ANDROID_O_DIR/*.o 2>/dev/null | wc -l) files"
+
+# Inject prebuilt libtcc.a AND android support .o files into the link step
 # The configure step with --tinycc=prebuilt may not fully wire up the static lib
 # for Android cross-compilation, so we ensure it's added to the binary link line.
 LIBTCC_A="$WEBKIT_OUTPUT/lib/libtcc.a"
 if [ -f "$LIBTCC_A" ]; then
-    echo ">>> Injecting libtcc.a into link step..."
+    echo ">>> Injecting libtcc.a and android support objects into link step..."
     cd "$NINJA_DIR"
-    # Find the main bun binary link rule in build.ninja and add libtcc.a as input.
-    # The rule looks like: "build bun: CXX_LINK <objects>" or similar.
-    # We append libtcc.a to the inputs AFTER the first colon on that line.
+    # Collect all extra objects/libs to inject
+    EXTRA_LINKS="$LIBTCC_A"
+    for obj in "$ANDROID_O_DIR"/*.o; do
+        [ -f "$obj" ] && EXTRA_LINKS="$EXTRA_LINKS $obj"
+    done
+    # Find the main bun binary link rule in build.ninja and append extra inputs.
     if grep -q "^build bun:" "$BUILD_NINJA" 2>/dev/null; then
-        # Check if libtcc.a is already in the inputs
         if ! grep -q "libtcc\\.a" "$BUILD_NINJA"; then
-            sed -i "s|^build bun: \(.*\)|build bun: \1 $LIBTCC_A|" "$BUILD_NINJA"
-            echo "    Added libtcc.a to bun link inputs"
+            # Escape slashes for sed
+            EXTRA_LINKS_ESC=$(echo "$EXTRA_LINKS" | sed 's|/|\\/|g')
+            sed -i "s|^build bun: \(.*\)|build bun: \1 $EXTRA_LINKS_ESC|" "$BUILD_NINJA"
+            echo "    Added ${EXTRA_LINKS} to bun link inputs"
         else
             echo "    libtcc.a already in build.ninja inputs"
         fi
     else
-        # Fallback: try to find any CXX_LINK rule for bun
         echo "    Could not find 'build bun:' rule, trying alternative patterns..."
         for pattern in "^build bun-: CXX_LINK" "^build release: CXX_LINK"; do
             if grep -q "$pattern" "$BUILD_NINJA" 2>/dev/null; then
-                sed -i "s|$pattern \(.*\)|$pattern \1 $LIBTCC_A|" "$BUILD_NINJA"
-                echo "    Added libtcc.a via pattern: $pattern"
+                EXTRA_LINKS_ESC=$(echo "$EXTRA_LINKS" | sed 's|/|\\/|g')
+                sed -i "s|$pattern \(.*\)|$pattern \1 $EXTRA_LINKS_ESC|" "$BUILD_NINJA"
+                echo "    Added via pattern: $pattern"
                 break
             fi
         done
