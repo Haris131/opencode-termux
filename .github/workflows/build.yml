@@ -6,7 +6,7 @@ on:
       opencode_version:
         description: 'OpenCode version to build'
         required: false
-        default: '1.17.10'
+        default: '1.17.13'
       commit_sha:
         description: 'Commit hash or branch name'
         required: false
@@ -19,7 +19,7 @@ on:
 env:
   BUN_VERSION: "1.3.14"
   HOST_BUN_VERSION: "1.3.14"
-  OPENCODE_VERSION: "1.17.10"
+  OPENCODE_VERSION: "1.17.13"
   ANDROID_API: "24"
   ANDROID_NDK_VERSION: "28.1.13356709"
   WEBKIT_COMMIT: "017930ebf915121f8f593bef61cbbca82d78132d"
@@ -171,17 +171,21 @@ jobs:
           WEBKIT_PATCH_HASH=$(sha256sum patches/webkit/android-support.patch | cut -c1-16)
           ZIG_PATCH_HASH=$(sha256sum patches/zig/posix-android-sigaction.patch | cut -c1-16)
           BUILD_SCRIPT_HASH=$(sha256sum scripts/build-bun.sh | cut -c1-16)
+          TINYCC_SCRIPT_HASH=$(sha256sum scripts/build-tinycc.sh | cut -c1-16)
+          OPENCODE_SCRIPT_HASH=$(sha256sum scripts/build-opencode.sh | cut -c1-16)
           echo "bun_patch_hash=$BUN_PATCH_HASH" >> $GITHUB_OUTPUT
           echo "webkit_patch_hash=$WEBKIT_PATCH_HASH" >> $GITHUB_OUTPUT
           echo "zig_patch_hash=$ZIG_PATCH_HASH" >> $GITHUB_OUTPUT
           echo "build_script_hash=$BUILD_SCRIPT_HASH" >> $GITHUB_OUTPUT
+          echo "tinycc_script_hash=$TINYCC_SCRIPT_HASH" >> $GITHUB_OUTPUT
+          echo "opencode_script_hash=$OPENCODE_SCRIPT_HASH" >> $GITHUB_OUTPUT
 
       - name: Cache Bun binary
         id: cache-bun
         uses: actions/cache@v5
         with:
           path: ${{ env.WORK_DIR }}/bun-build/bun
-          key: bun-android-v3-${{ env.BUN_VERSION }}-${{ steps.hashes.outputs.bun_patch_hash }}-${{ steps.hashes.outputs.zig_patch_hash }}-${{ steps.hashes.outputs.build_script_hash }}-debug${{ github.event.inputs.debug || 'false' }}
+          key: bun-android-v4-${{ env.BUN_VERSION }}-${{ steps.hashes.outputs.bun_patch_hash }}-${{ steps.hashes.outputs.zig_patch_hash }}-${{ steps.hashes.outputs.build_script_hash }}-${{ steps.hashes.outputs.tinycc_script_hash }}-debug${{ github.event.inputs.debug || 'false' }}
 
       # =============================================
       # Clone and patch sources

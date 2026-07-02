@@ -48,6 +48,10 @@ else
     exit 1
 fi
 
+# Build TinyCC (libtcc.a) for Android — required by bun:ffi for dlopen() support
+echo ">>> Building TinyCC (libtcc.a) for Android..."
+"$SCRIPT_DIR/build-tinycc.sh"
+
 # Create build directory
 mkdir -p "$BUN_BUILD"
 
@@ -62,6 +66,8 @@ HOST_BUN="${HOST_BUN:-bun}"
 # For Android, the build system handles cross-compilation WebKit prebuilts.
 # NDK path and API level are auto-detected from env vars (ANDROID_NDK_HOME, etc.)
 # by the build system's detectAndroidNdk() function.
+# TinyCC support is injected post-configure into the build.ninja link step
+# because the build system can't cross-compile TinyCC from source on Android.
 "$HOST_BUN" run build \
     $BUILD_FLAGS \
     --abi=android \
@@ -91,6 +97,40 @@ fi
 
 NINJA_DIR=$(dirname "$BUILD_NINJA")
 echo "    Ninja build dir: $NINJA_DIR"
+
+# Inject prebuilt libtcc.a into the link step
+# The configure step with --tinycc=prebuilt may not fully wire up the static lib
+# for Android cross-compilation, so we ensure it's added to the binary link line.
+LIBTCC_A="$WEBKIT_OUTPUT/lib/libtcc.a"
+if [ -f "$LIBTCC_A" ]; then
+    echo ">>> Injecting libtcc.a into link step..."
+    cd "$NINJA_DIR"
+    # Find the main bun binary link rule in build.ninja and add libtcc.a as input.
+    # The rule looks like: "build bun: CXX_LINK <objects>" or similar.
+    # We append libtcc.a to the inputs AFTER the first colon on that line.
+    if grep -q "^build bun:" "$BUILD_NINJA" 2>/dev/null; then
+        # Check if libtcc.a is already in the inputs
+        if ! grep -q "libtcc\\.a" "$BUILD_NINJA"; then
+            sed -i "s|^build bun: \(.*\)|build bun: \1 $LIBTCC_A|" "$BUILD_NINJA"
+            echo "    Added libtcc.a to bun link inputs"
+        else
+            echo "    libtcc.a already in build.ninja inputs"
+        fi
+    else
+        # Fallback: try to find any CXX_LINK rule for bun
+        echo "    Could not find 'build bun:' rule, trying alternative patterns..."
+        for pattern in "^build bun-: CXX_LINK" "^build release: CXX_LINK"; do
+            if grep -q "$pattern" "$BUILD_NINJA" 2>/dev/null; then
+                sed -i "s|$pattern \(.*\)|$pattern \1 $LIBTCC_A|" "$BUILD_NINJA"
+                echo "    Added libtcc.a via pattern: $pattern"
+                break
+            fi
+        done
+    fi
+else
+    echo "WARNING: libtcc.a not found at $LIBTCC_A"
+    echo "    TinyCC support will NOT be available. Build TinyCC first."
+fi
 
 # Try to download Zig vendor BEFORE the full build
 # The zig_fetch rule is defined in the generated build.ninja

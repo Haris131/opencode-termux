@@ -416,3 +416,14 @@ index 813670e..d2aa2f1 100644
 -
 -const bun = @import("bun");
 -const std = @import("std");
+diff --git a/src/tcc_sys/tcc.zig b/src/tcc_sys/tcc.zig
+index 0000000..0000000 100644
+--- a/src/tcc_sys/tcc.zig
++++ b/src/tcc_sys/tcc.zig
+@@ -1,3 +1,4 @@
+ pub const TCCState = State;
++pub const tcc_available: bool = true;
+ const TCCErrorFunc = ?*const fn (?*anyopaque, [*:0]const u8) callconv(.c) void;
+ fn ErrorFunc(Ctx: type) type {
+     return fn (ctx: ?*Ctx, msg: [*:0]const u8) callconv(.c) void;
+
