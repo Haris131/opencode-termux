@@ -166,13 +166,15 @@ if [ -f "$LIBTCC_A" ]; then
     # Find the main bun binary link rule in build.ninja and append extra inputs.
     if grep -q "^build bun:" "$BUILD_NINJA" 2>/dev/null; then
         if ! grep -q "libtcc\\.a" "$BUILD_NINJA"; then
-            # Escape slashes for sed
-            EXTRA_LINKS_ESC=$(echo "$EXTRA_LINKS" | sed 's|/|\\/|g')
-            sed -i "s|^build bun: \(.*\)|build bun: \1 $EXTRA_LINKS_ESC|" "$BUILD_NINJA"
-            echo "    Added ${EXTRA_LINKS} to bun link inputs"
-            # _android_tls_align_force is now referenced from android_disable_tags.c's
-            # constructor (via extern __thread), which creates a TLS relocation
-            # that prevents --gc-sections from discarding the .tbss.
+            # Append to the build bun line using Python (safest for complex paths)
+            python3 -c "
+import re, sys
+n, e = sys.argv[1], sys.argv[2]
+with open(n) as f: t = f.read()
+t = re.sub(r'(?m)^(build bun: .*)$', lambda m: m.group(1) + ' ' + e, t, count=1)
+with open(n, 'w') as f: f.write(t)
+print('Added to build bun line')
+" "$BUILD_NINJA" "$EXTRA_LINKS" 2>&1 || echo "WARNING: Failed to inject objects"
         else
             echo "    libtcc.a already in build.ninja inputs"
         fi
@@ -180,9 +182,14 @@ if [ -f "$LIBTCC_A" ]; then
         echo "    Could not find 'build bun:' rule, trying alternative patterns..."
         for pattern in "^build bun-: CXX_LINK" "^build release: CXX_LINK"; do
             if grep -q "$pattern" "$BUILD_NINJA" 2>/dev/null; then
-                EXTRA_LINKS_ESC=$(echo "$EXTRA_LINKS" | sed 's|/|\\/|g')
-                sed -i "s|$pattern \(.*\)|$pattern \1 $EXTRA_LINKS_ESC|" "$BUILD_NINJA"
-                echo "    Added via pattern: $pattern"
+                python3 -c "
+import re, sys
+n, p, e = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(n) as f: t = f.read()
+t = re.sub(r'(?m)^(' + p.split(':')[0].strip() + r' .*)$', lambda m: m.group(1) + ' ' + e, t, count=1)
+with open(n, 'w') as f: f.write(t)
+print('Added via pattern')
+" "$BUILD_NINJA" "$pattern" "$EXTRA_LINKS" 2>&1 && echo "    Added via pattern: $pattern"
                 break
             fi
         done
