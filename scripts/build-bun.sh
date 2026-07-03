@@ -70,6 +70,13 @@ if [ -f "$BUN_SRC/src/android_tls_align.s" ]; then
 fi
 echo "    Early android support objects: $(ls $ANDROID_O_DIR_EARLY/*.o 2>/dev/null | wc -l) files"
 
+# Remove source files to prevent the post-configure compile step from
+# recompiling them WITHOUT -fno-emulated-tls (which would produce
+# __emutls_v_ symbol prefix mismatch).
+# Post-configure code checks [ -f "$BUN_SRC/src/..." ] and if absent,
+# falls back to these early-compiled objects.
+rm -f "$BUN_SRC/src/android_disable_tags.c" "$BUN_SRC/src/android_tls_align.c" "$BUN_SRC/src/android_tls_align.s"
+
 # Build TinyCC (libtcc.a) for Android — required by bun:ffi for dlopen() support
 echo ">>> Building TinyCC (libtcc.a) for Android..."
 "$SCRIPT_DIR/build-tinycc.sh"
