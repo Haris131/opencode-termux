@@ -154,12 +154,30 @@ if [ -f "$LIBTCC_A" ]; then
     # Find the main bun binary link rule in build.ninja and append extra inputs.
     if grep -q "^build bun:" "$BUILD_NINJA" 2>/dev/null; then
         if ! grep -q "libtcc\\.a" "$BUILD_NINJA"; then
-            # Escape slashes for sed
+            # Pack android support .o files into a static library so we can
+            # use --whole-archive to prevent linker GC from dropping .tbss
+            ANDROID_A="$NINJA_DIR/libandroid_tls.a"
+            $ANDROID_AR rcs "$ANDROID_A" "$ANDROID_O_DIR"/*.o
+            echo "    Created $ANDROID_A with $(ls $ANDROID_O_DIR/*.o | wc -l) objects"
+            # Inject: link libtcc.a and the android archive with whole-archive
+            EXTRA_LINKS="$LIBTCC_A -Wl,--whole-archive $ANDROID_A -Wl,--no-whole-archive"
             EXTRA_LINKS_ESC=$(echo "$EXTRA_LINKS" | sed 's|/|\\/|g')
             sed -i "s|^build bun: \(.*\)|build bun: \1 $EXTRA_LINKS_ESC|" "$BUILD_NINJA"
             echo "    Added ${EXTRA_LINKS} to bun link inputs"
         else
-            echo "    libtcc.a already in build.ninja inputs"
+            # Re-check: we might have already added but without --whole-archive
+            if grep -q "libtcc\\.a" "$BUILD_NINJA" && ! grep -q "whole-archive" "$BUILD_NINJA" 2>/dev/null; then
+                # Recreate the archive and add with whole-archive
+                ANDROID_A="$NINJA_DIR/libandroid_tls.a"
+                ls "$ANDROID_O_DIR"/*.o 2>/dev/null && $ANDROID_AR rcs "$ANDROID_A" "$ANDROID_O_DIR"/*.o || true
+                [ -f "$ANDROID_A" ] && EXTRA_LINKS="$LIBTCC_A -Wl,--whole-archive $ANDROID_A -Wl,--no-whole-archive" || EXTRA_LINKS="$LIBTCC_A"
+                EXTRA_LINKS_ESC=$(echo "$EXTRA_LINKS" | sed 's|/|\\/|g')
+                # Replace the existing libtcc.a reference with the new one
+                sed -i "s|libtcc\\.a[^ ]* |$EXTRA_LINKS_ESC |" "$BUILD_NINJA"
+                echo "    Updated to use whole-archive for android TLS objects"
+            else
+                echo "    libtcc.a already in build.ninja inputs"
+            fi
         fi
     else
         echo "    Could not find 'build bun:' rule, trying alternative patterns..."
