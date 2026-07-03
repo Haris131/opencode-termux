@@ -147,7 +147,7 @@ jobs:
 
       - name: Install Bun (host, pinned for module graph compatibility)
         run: |
-          # Host Bun must support OpenCode v1.17.10's bun.lock format (v1) and
+          # Host Bun must support OpenCode v1.17.13's bun.lock format (v1) and
           # produce a module graph format compatible with the Android Bun's
           # patched StandaloneModuleGraph (52-byte stride).
           HOST_BUN_VERSION="$HOST_BUN_VERSION"
@@ -232,6 +232,14 @@ jobs:
           else
             echo "WARNING: llvm-strip not found, skipping strip"
           fi
+
+      - name: Compress Bun binary
+        run: |
+          source scripts/env.sh
+          mkdir -p "${WORK_DIR}/packages"
+          tar -cJf "${WORK_DIR}/packages/bun-v${BUN_VERSION}.tar.xz" -C "$BUN_BUILD" bun
+          echo "Created bun-v${BUN_VERSION}.tar.xz"
+          ls -lh "${WORK_DIR}/packages/bun-v${BUN_VERSION}.tar.xz"
 
       # =============================================
       # Install Zig (needed for opentui build)
@@ -335,7 +343,7 @@ jobs:
             ${{ env.WORK_DIR }}/packages/*.zip
             ${{ env.WORK_DIR }}/packages/*.pkg.tar.xz
             ${{ env.WORK_DIR }}/packages/*.deb
-            ${{ env.WORK_DIR }}/bun-build/bun-*.tar.xz
+            ${{ env.WORK_DIR }}/packages/bun-*.tar.xz
           body: |
             ## OpenCode ${{ env.OPENCODE_VERSION }} for Android/Termux (aarch64)
 
