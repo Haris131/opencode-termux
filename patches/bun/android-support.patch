@@ -16,7 +16,7 @@ new file mode 100644
 index 0000000..5fdd859
 --- /dev/null
 +++ b/src/android_disable_tags.c
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,66 @@
 +#if defined(__ANDROID__) && defined(__aarch64__)
 +
 +#include <stdint.h>
