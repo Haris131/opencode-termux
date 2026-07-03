@@ -6,24 +6,25 @@ on:
       opencode_version:
         description: 'OpenCode version to build'
         required: false
-        default: '1.3.13'
+        default: '1.17.13'
       commit_sha:
-        description: 'Commit hash'
+        description: 'Commit hash or branch name'
         required: false
-        default: 'main'
+        default: 'dev'
       debug:
         description: 'Enable debug mode (debug symbols + Zig safety checks)'
         required: false
         default: 'false'
 
 env:
-  BUN_VERSION: "1.2.13"
-  OPENCODE_VERSION: "1.3.13"
+  BUN_VERSION: "1.3.14"
+  HOST_BUN_VERSION: "1.3.14"
+  OPENCODE_VERSION: "1.17.13"
   ANDROID_API: "24"
   ANDROID_NDK_VERSION: "28.1.13356709"
   WEBKIT_COMMIT: "017930ebf915121f8f593bef61cbbca82d78132d"
   TINYCC_COMMIT: "b91835d8701523e895a2b447713630069514e291"
-  OPENTUI_COMMIT: "b2e0db91e328745cdedc2ce716184da4f9648ad5"
+  OPENTUI_COMMIT: "9b216a58d974704ae638b3043aece2eb70b5ff19"
   ICU_VERSION: "75.1"
   ZIG_VERSION: "0.15.2"
   # golem10 has 15GB RAM — limit parallelism to avoid OOM during WebKit link
@@ -41,7 +42,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.commit_sha || 'main' }}
 
@@ -70,31 +71,24 @@ jobs:
             echo "apt-get update attempt $i failed, retrying..."
             sleep 5
           done
+          # Clang 21 is required by Bun 1.3.14's build system (for host-side tools)
+          # Install from LLVM repo since Ubuntu LTS may not ship Clang 21
+          sudo apt-get install -y lsb-release wget software-properties-common
+          LLVM_VERSION=21
+          wget -qO- "https://apt.llvm.org/llvm-snapshot.gpg.key" | sudo tee /etc/apt/trusted.gpg.d/llvm.asc
+          sudo add-apt-repository -y "deb https://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-${LLVM_VERSION} main"
+          sudo apt-get update
           sudo apt-get install -y \
+            "clang-${LLVM_VERSION}" "lld-${LLVM_VERSION}" "clangd-${LLVM_VERSION}" \
             ninja-build python3 ruby perl \
             git curl wget unzip xz-utils zip \
             build-essential pkg-config \
             libxml2-dev libxslt1-dev \
             golang-go \
             autoconf automake libtool
-
-      - name: Install CMake 3.28+
-        run: |
-          # Ubuntu 22.04 ships CMake 3.22 but Bun needs 3.24+
-          CMAKE_VER="3.28.6"
-          if cmake --version 2>/dev/null | grep -q "3\.2[89]\|3\.[3-9]"; then
-            echo "CMake already new enough: $(cmake --version | head -1)"
-          else
-            echo "Installing CMake ${CMAKE_VER}..."
-            cd /tmp
-            timeout 120 wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VER}/cmake-${CMAKE_VER}-linux-x86_64.tar.gz" -O cmake.tar.gz
-            sudo tar xzf cmake.tar.gz -C /opt/
-            sudo ln -sf "/opt/cmake-${CMAKE_VER}-linux-x86_64/bin/cmake" /usr/local/bin/cmake
-            sudo ln -sf "/opt/cmake-${CMAKE_VER}-linux-x86_64/bin/ctest" /usr/local/bin/ctest
-            sudo ln -sf "/opt/cmake-${CMAKE_VER}-linux-x86_64/bin/cpack" /usr/local/bin/cpack
-            rm cmake.tar.gz
-          fi
-          cmake --version
+          sudo update-alternatives --install /usr/bin/clang clang "/usr/bin/clang-${LLVM_VERSION}" 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ "/usr/bin/clang++-${LLVM_VERSION}" 100
+          sudo update-alternatives --install /usr/bin/lld lld "/usr/bin/lld-${LLVM_VERSION}" 100
 
       - name: Install Android NDK r28b
         run: |
@@ -111,45 +105,72 @@ jobs:
             rm ndk.zip
           fi
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$NDK_DIR" >> $GITHUB_ENV
           echo "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
-      - name: Install Rust with Android target
+      - name: Link Android compiler-rt into LLVM 21 resource dir
         run: |
-          if ! command -v rustup &>/dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-            source "$HOME/.cargo/env"
-          fi
-          rustup target add aarch64-linux-android
-
-      - name: Install Zig 0.15.2
-        run: |
-          ZIG_DIR="$WORK_DIR/zig-${ZIG_VERSION}"
-          if [ -x "$ZIG_DIR/zig" ]; then
-            echo "Zig already installed at $ZIG_DIR"
-          else
-            echo "Downloading Zig ${ZIG_VERSION}..."
-            cd /tmp
-            wget -q "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -O zig.tar.xz
-            mkdir -p "$ZIG_DIR"
-            tar xf zig.tar.xz -C "$ZIG_DIR" --strip-components=1
-            rm zig.tar.xz
-          fi
-          echo "ZIG_BIN=$ZIG_DIR/zig" >> $GITHUB_ENV
-          echo "$ZIG_DIR" >> $GITHUB_PATH
+          # LLVM 21's clang needs Android compiler-rt builtins at an exact path:
+          #   <resource-dir>/lib/<target-triple>/libclang_rt.builtins.a
+          # The NDK ships them under a different layout. Bun's configure step
+          # (linkNdkRuntimesIntoClang) tries to create these symlinks but
+          # can't because /usr/lib/llvm-21/lib/clang/21/ is root-owned.
+          # Pre-create them here with sudo.
+          LLVM_RESOURCE_DIR="/usr/lib/llvm-21/lib/clang/21"
+          NDK_CLANG_DIR=$(ls -d /opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/*/)
+          NDK_CLANG_VER=$(basename "$NDK_CLANG_DIR")
+          echo "NDK clang version: $NDK_CLANG_VER"
+          TARGET_DIR="${LLVM_RESOURCE_DIR}/lib/aarch64-unknown-linux-android${ANDROID_API}"
+          FLAT_DIR="${LLVM_RESOURCE_DIR}/lib/linux"
+          sudo mkdir -p "$TARGET_DIR"
+          sudo mkdir -p "${FLAT_DIR}/aarch64"
+          # NDK r28b (clang 19): builtins in flat lib/linux/, libunwind in per-arch lib/linux/<arch>/
+          echo "NDK clang lib/linux contents:"
+          ls -la "${NDK_CLANG_DIR}lib/linux/" 2>&1 || true
+          ls -la "${NDK_CLANG_DIR}lib/linux/aarch64/" 2>&1 || true
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/libclang_rt.builtins-aarch64-android.a" \
+            "${TARGET_DIR}/libclang_rt.builtins.a"
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libunwind.a" \
+            "${TARGET_DIR}/libunwind.a"
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/libclang_rt.builtins-aarch64-android.a" \
+            "${FLAT_DIR}/libclang_rt.builtins-aarch64-android.a"
+          sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libunwind.a" \
+            "${FLAT_DIR}/aarch64/libunwind.a"
+          echo "Android compiler-rt symlinks created in LLVM 21 resource dir"
+          # Install a strip wrapper BEFORE Bun build.
+          # Bun's ninja build calls: strip --strip-all bun-profile extra1.a extra2.a -o bun
+          # llvm-strip doesn't support multi-input + -o, and GNU strip can't handle aarch64.
+          # The wrapper strips only the first input (the actual binary) and discards extras.
+          sudo tee /usr/local/bin/strip-wrapper > /dev/null << 'STRIP_WRAPPER'
+#!/bin/bash
+# Strip wrapper for Bun's ninja multi-input strip rule.
+# Parses args, strips only the first positional (the binary), writes to -o output.
+NDK_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+OUTPUT=""
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o) OUTPUT="$2"; shift 2;;
+        *)  POSITIONAL+=("$1"); shift;;
+    esac
+done
+FIRST="${POSITIONAL[0]}"
+if [[ -n "$OUTPUT" ]]; then
+    "$NDK_STRIP" --strip-all --strip-debug --discard-all "$FIRST" -o "$OUTPUT"
+else
+    "$NDK_STRIP" --strip-all --strip-debug --discard-all "$FIRST"
+fi
+STRIP_WRAPPER
+          sudo chmod +x /usr/local/bin/strip-wrapper
+          sudo ln -sf /usr/local/bin/strip-wrapper /usr/local/bin/strip
+          echo "Installed strip wrapper for multi-input support"
 
       - name: Install Bun (host, pinned for module graph compatibility)
         run: |
-          # CRITICAL: The host Bun version must produce a module graph format
-          # compatible with the target Bun (v1.2.13).
-          #
-          # The standalone binary's CompiledModuleGraphFile struct changed:
-          #   - Bun <= 1.3.2:  36-byte stride (compatible with 1.2.x target)
-          #   - Bun >= 1.3.11: 52-byte stride (INCOMPATIBLE — causes OOM)
-          #
-          # We can't use 1.2.13 as host because it lacks catalog: workspace
-          # protocol support needed by OpenCode's monorepo. Pin to 1.3.2.
-          HOST_BUN_VERSION="1.3.2"
+          # Host Bun must support OpenCode v1.17.13's bun.lock format (v1) and
+          # produce a module graph format compatible with the Android Bun's
+          # patched StandaloneModuleGraph (52-byte stride).
+          HOST_BUN_VERSION="$HOST_BUN_VERSION"
           GOT="$(bun --version 2>/dev/null || true)"
           if [ "$GOT" != "$HOST_BUN_VERSION" ]; then
             echo "Installing Bun v${HOST_BUN_VERSION} (current: ${GOT:-none})..."
@@ -170,67 +191,30 @@ jobs:
           WEBKIT_PATCH_HASH=$(sha256sum patches/webkit/android-support.patch | cut -c1-16)
           ZIG_PATCH_HASH=$(sha256sum patches/zig/posix-android-sigaction.patch | cut -c1-16)
           BUILD_SCRIPT_HASH=$(sha256sum scripts/build-bun.sh | cut -c1-16)
+          TINYCC_SCRIPT_HASH=$(sha256sum scripts/build-tinycc.sh | cut -c1-16)
+          OPENCODE_SCRIPT_HASH=$(sha256sum scripts/build-opencode.sh | cut -c1-16)
           echo "bun_patch_hash=$BUN_PATCH_HASH" >> $GITHUB_OUTPUT
           echo "webkit_patch_hash=$WEBKIT_PATCH_HASH" >> $GITHUB_OUTPUT
           echo "zig_patch_hash=$ZIG_PATCH_HASH" >> $GITHUB_OUTPUT
           echo "build_script_hash=$BUILD_SCRIPT_HASH" >> $GITHUB_OUTPUT
-
-      - name: Cache ICU build
-        id: cache-icu
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.WORK_DIR }}/deps-android/prefix
-          key: icu-android-${{ env.ICU_VERSION }}-${{ env.ANDROID_API }}
-
-      - name: Cache WebKit build
-        id: cache-webkit
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.WORK_DIR }}/webkit-android
-          key: webkit-android-v5-${{ env.WEBKIT_COMMIT }}-${{ steps.hashes.outputs.webkit_patch_hash }}
+          echo "tinycc_script_hash=$TINYCC_SCRIPT_HASH" >> $GITHUB_OUTPUT
+          echo "opencode_script_hash=$OPENCODE_SCRIPT_HASH" >> $GITHUB_OUTPUT
 
       - name: Cache Bun binary
         id: cache-bun
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.WORK_DIR }}/bun-build/bun
-          key: bun-android-v2-${{ env.BUN_VERSION }}-${{ steps.hashes.outputs.bun_patch_hash }}-${{ steps.hashes.outputs.zig_patch_hash }}-${{ steps.hashes.outputs.build_script_hash }}-debug${{ github.event.inputs.debug || 'false' }}
+          key: bun-android-v4-${{ env.BUN_VERSION }}-${{ steps.hashes.outputs.bun_patch_hash }}-${{ steps.hashes.outputs.zig_patch_hash }}-${{ steps.hashes.outputs.build_script_hash }}-${{ steps.hashes.outputs.tinycc_script_hash }}-debug${{ github.event.inputs.debug || 'false' }}
 
       # =============================================
       # Clone and patch sources
       # =============================================
       - name: Clone and patch Bun + WebKit
-        if: steps.cache-bun.outputs.cache-hit != 'true' || steps.cache-webkit.outputs.cache-hit != 'true'
-        run: |
-          source scripts/env.sh
-          ./scripts/apply-patches.sh
-
-      # =============================================
-      # Build ICU
-      # =============================================
-      - name: Build ICU 75.1
-        if: steps.cache-icu.outputs.cache-hit != 'true'
-        run: |
-          source scripts/env.sh
-          ./scripts/build-icu.sh
-
-      # =============================================
-      # Build WebKit/JSC
-      # =============================================
-      - name: Build WebKit/JSC
-        if: steps.cache-webkit.outputs.cache-hit != 'true'
-        run: |
-          source scripts/env.sh
-          ./scripts/build-webkit.sh
-
-      # =============================================
-      # Build TinyCC (libtcc.a)
-      # =============================================
-      - name: Build TinyCC
         if: steps.cache-bun.outputs.cache-hit != 'true'
         run: |
           source scripts/env.sh
-          ./scripts/build-tinycc.sh
+          ./scripts/apply-patches.sh
 
       # =============================================
       # Build Bun
@@ -253,6 +237,45 @@ jobs:
           ls -lh "$BUN_BINARY"
           file "$BUN_BINARY"
           readelf -h "$BUN_BINARY" | grep -E "Machine|Class"
+
+      - name: Strip Bun binary
+        run: |
+          BUN_BINARY="${WORK_DIR}/bun-build/bun"
+          NDK_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          # Replace the strip wrapper with real llvm-strip for standalone stripping
+          if [ -x "$NDK_STRIP" ]; then
+            sudo ln -sf "$NDK_STRIP" /usr/local/bin/strip
+            echo "Before stripping:"
+            ls -lh "$BUN_BINARY"
+            cp "$BUN_BINARY" "${BUN_BINARY}.unstripped"
+            $NDK_STRIP "$BUN_BINARY"
+            echo "After stripping:"
+            ls -lh "$BUN_BINARY"
+          else
+            echo "WARNING: llvm-strip not found, skipping strip"
+          fi
+
+      - name: Compress Bun binary
+        run: |
+          source scripts/env.sh
+          mkdir -p "${WORK_DIR}/packages"
+          tar -cJf "${WORK_DIR}/packages/bun-v${BUN_VERSION}.tar.xz" -C "$BUN_BUILD" bun
+          echo "Created bun-v${BUN_VERSION}.tar.xz"
+          ls -lh "${WORK_DIR}/packages/bun-v${BUN_VERSION}.tar.xz"
+
+      # =============================================
+      # Install Zig (needed for opentui build)
+      # =============================================
+      - name: Install Zig
+        run: |
+          ZIG_VERSION="${ZIG_VERSION:-0.15.2}"
+          echo "Installing Zig ${ZIG_VERSION}..."
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          sudo mv "zig-x86_64-linux-${ZIG_VERSION}" /opt/zig
+          echo "/opt/zig" >> $GITHUB_PATH
+          export PATH="/opt/zig:$PATH"
+          zig version
 
       # =============================================
       # Build libopentui.so
@@ -277,6 +300,10 @@ jobs:
           ls -lh "$OPENCODE_BINARY"
           file "$OPENCODE_BINARY"
           readelf -h "$OPENCODE_BINARY" | grep -E "Machine|Class"
+          # NOTE: Do NOT strip the opencode binary.
+          # It is Bun + module graph appended after ELF sections.
+          # llvm-strip truncates the file at the end of the last ELF section,
+          # removing the module graph and breaking the standalone binary.
 
       # =============================================
       # Create packages
@@ -285,6 +312,28 @@ jobs:
         run: |
           source scripts/env.sh
           ./scripts/make-packages.sh
+
+      - name: Compress bun binaries with tar.xz
+        run: |
+          BUN_DIR="${WORK_DIR}/bun-build"
+          BUN_VERSION="${{ env.BUN_VERSION }}"
+          # Compress stripped bun
+          if [ -f "$BUN_DIR/bun" ]; then
+            cp "$BUN_DIR/bun" "$BUN_DIR/bun-${BUN_VERSION}-stripped"
+            tar -cJf "$BUN_DIR/bun-${BUN_VERSION}-stripped.tar.xz" -C "$BUN_DIR" "bun-${BUN_VERSION}-stripped" 2>/dev/null || \
+              xz -9 -T0 "$BUN_DIR/bun-${BUN_VERSION}-stripped"
+            rm -f "$BUN_DIR/bun-${BUN_VERSION}-stripped"
+            echo "Created: bun-${BUN_VERSION}-stripped.tar.xz"
+          fi
+          # Compress unstripped bun if exists
+          if [ -f "$BUN_DIR/bun.unstripped" ]; then
+            cp "$BUN_DIR/bun.unstripped" "$BUN_DIR/bun-${BUN_VERSION}-unstripped"
+            tar -cJf "$BUN_DIR/bun-${BUN_VERSION}-unstripped.tar.xz" -C "$BUN_DIR" "bun-${BUN_VERSION}-unstripped" 2>/dev/null || \
+              xz -9 -T0 "$BUN_DIR/bun-${BUN_VERSION}-unstripped"
+            rm -f "$BUN_DIR/bun-${BUN_VERSION}-unstripped"
+            echo "Created: bun-${BUN_VERSION}-unstripped.tar.xz"
+          fi
+          ls -lh "$BUN_DIR"/bun-*.tar.xz
 
       - name: List packages
         run: |
@@ -308,7 +357,7 @@ jobs:
       # Release
       # =============================================
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: OpenCode ${{ env.OPENCODE_VERSION }} for Android/Termux (aarch64)
           tag_name: v${{ env.OPENCODE_VERSION }}
@@ -316,7 +365,7 @@ jobs:
             ${{ env.WORK_DIR }}/packages/*.zip
             ${{ env.WORK_DIR }}/packages/*.pkg.tar.xz
             ${{ env.WORK_DIR }}/packages/*.deb
-            ${{ env.WORK_DIR }}/bun-build/*
+            ${{ env.WORK_DIR }}/packages/bun-*.tar.xz
           body: |
             ## OpenCode ${{ env.OPENCODE_VERSION }} for Android/Termux (aarch64)
 
@@ -358,11 +407,7 @@ jobs:
         run: |
           # Remove source trees (they can be re-cloned) but keep cached artifacts
           rm -rf "${WORK_DIR}/bun-src" "${WORK_DIR}/webkit-src" "${WORK_DIR}/opentui-src" "${WORK_DIR}/opencode-src"
-          rm -rf "${WORK_DIR}/icu-src" "${WORK_DIR}/icu-host-build" "${WORK_DIR}/icu-android-build"
-          rm -rf "${WORK_DIR}/webkit-build"
-          # Clear Zig cache when bun-src is removed — the cache references files
-          # in vendor/zig/ which lives inside bun-src. Stale references cause
-          # FileNotFound errors in the translate-c output cache.
-          rm -rf "${WORK_DIR}/bun-build/cache/zig"
+          # Clear any build artifacts except the final binaries
+          rm -rf "${WORK_DIR}/bun-build/cache"
           echo "Cleaned up intermediate files"
           df -h /mnt/spindrive
