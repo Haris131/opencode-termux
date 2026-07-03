@@ -69,10 +69,17 @@ index 0000000..5fdd859
 +          0);
 +}
 +
++// Reference _android_tls_align_force from the assembly file to
++// prevent --gc-sections from dropping the .tbss section.
++// This forces the linker to create PT_TLS with p_align >= 64,
++// which Bionic requires for correct TCB layout.
++extern __thread char _android_tls_align_force;
++
 +__attribute__((constructor))
 +static void android_init(void) {
 +    disable_tagged_addresses();
 +    disable_heap_tagging();
++    *(volatile char*)&_android_tls_align_force; // Force TLS relocation to keep .tbss
 +}
 +
 +#endif /* __ANDROID__ && __aarch64__ */

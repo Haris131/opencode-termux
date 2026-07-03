@@ -158,10 +158,9 @@ if [ -f "$LIBTCC_A" ]; then
             EXTRA_LINKS_ESC=$(echo "$EXTRA_LINKS" | sed 's|/|\\/|g')
             sed -i "s|^build bun: \(.*\)|build bun: \1 $EXTRA_LINKS_ESC|" "$BUILD_NINJA"
             echo "    Added ${EXTRA_LINKS} to bun link inputs"
-            # Force linker to keep the .tbss section: add --undefined to LINK_FLAGS
-            # Find the LINK_FLAGS line in the ninja file and append our symbol
-            sed -i '/^LINK_FLAGS[ =]/ s/$/ -Wl,--undefined=_android_tls_align_force/' "$BUILD_NINJA"
-            echo "    Added --undefined=_android_tls_align_force to LINK_FLAGS"
+            # _android_tls_align_force is now referenced from android_disable_tags.c's
+            # constructor (via extern __thread), which creates a TLS relocation
+            # that prevents --gc-sections from discarding the .tbss.
         else
             echo "    libtcc.a already in build.ninja inputs"
         fi
