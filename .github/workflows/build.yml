@@ -137,30 +137,28 @@ jobs:
           sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libunwind.a" \
             "${FLAT_DIR}/aarch64/libunwind.a"
           echo "Android compiler-rt symlinks created in LLVM 21 resource dir"
-          # Install a strip wrapper BEFORE Bun build.
-          # Bun's ninja build calls: strip --strip-all bun-profile extra1.a extra2.a -o bun
-          # llvm-strip doesn't support multi-input + -o, and GNU strip can't handle aarch64.
-          # The wrapper strips only the first input (the actual binary) and discards extras.
-          sudo tee /usr/local/bin/strip-wrapper > /dev/null << 'STRIP_WRAPPER'
-#!/bin/bash
-# Strip wrapper for Bun's ninja multi-input strip rule.
-# Parses args, strips only the first positional (the binary), writes to -o output.
-NDK_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-OUTPUT=""
-POSITIONAL=()
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -o) OUTPUT="$2"; shift 2;;
-        *)  POSITIONAL+=("$1"); shift;;
-    esac
-done
-FIRST="${POSITIONAL[0]}"
-if [[ -n "$OUTPUT" ]]; then
-    "$NDK_STRIP" --strip-all --strip-debug --discard-all "$FIRST" -o "$OUTPUT"
-else
-    "$NDK_STRIP" --strip-all --strip-debug --discard-all "$FIRST"
-fi
-STRIP_WRAPPER
+
+      - name: Install strip wrapper for Bun multi-input
+        run: |
+          NDK_STRIP_PATH="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          printf '%s\n' \
+            '#!/bin/bash' \
+            'NDK_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"' \
+            'OUTPUT=""' \
+            'POSITIONAL=()' \
+            'while [[ $# -gt 0 ]]; do' \
+            '    case "$1" in' \
+            '        -o) OUTPUT="$2"; shift 2;;' \
+            '        *)  POSITIONAL+=("$1"); shift;;' \
+            '    esac' \
+            'done' \
+            'FIRST="${POSITIONAL[0]}"' \
+            'if [[ -n "$OUTPUT" ]]; then' \
+            '    "$NDK_STRIP" --strip-all --strip-debug --discard-all "$FIRST" -o "$OUTPUT"' \
+            'else' \
+            '    "$NDK_STRIP" --strip-all --strip-debug --discard-all "$FIRST"' \
+            'fi' \
+            | sudo tee /usr/local/bin/strip-wrapper > /dev/null
           sudo chmod +x /usr/local/bin/strip-wrapper
           sudo ln -sf /usr/local/bin/strip-wrapper /usr/local/bin/strip
           echo "Installed strip wrapper for multi-input support"
