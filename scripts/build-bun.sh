@@ -155,44 +155,22 @@ fi
 echo "    Android support objects: $(echo "$ANDROID_O_FILES" | wc -w) files"
 
 # Inject prebuilt libtcc.a AND android support .o files into the link step
-# The configure step with --tinycc=prebuilt may not fully wire up the static lib
-# for Android cross-compilation, so we ensure it's added to the binary link line.
 LIBTCC_A="$WEBKIT_OUTPUT/lib/libtcc.a"
 if [ -f "$LIBTCC_A" ]; then
     echo ">>> Injecting libtcc.a and android support objects into link step..."
-    cd "$NINJA_DIR"
-    # Collect all extra objects/libs to inject
-    EXTRA_LINKS="$LIBTCC_A $ANDROID_O_FILES"
-    # Find the main bun binary link rule in build.ninja and append extra inputs.
-    if grep -q "^build bun:" "$BUILD_NINJA" 2>/dev/null; then
-        if ! grep -q "libtcc\\.a" "$BUILD_NINJA"; then
-            # Append to the build bun line using Python (safest for complex paths)
-            python3 -c "
-import re, sys
-n, e = sys.argv[1], sys.argv[2]
-with open(n) as f: t = f.read()
-t = re.sub(r'(?m)^(build bun: .*)$', lambda m: m.group(1) + ' ' + e, t, count=1)
-with open(n, 'w') as f: f.write(t)
-print('Added to build bun line')
-" "$BUILD_NINJA" "$EXTRA_LINKS" 2>&1 || echo "WARNING: Failed to inject objects"
-        else
-            echo "    libtcc.a already in build.ninja inputs"
-        fi
+    # Build a single static archive with short, relative path name
+    ln -sf "$NINJA_DIR" "$BUN_BUILD/ninjainput" 2>/dev/null || true
+    ANDROID_A="$BUN_BUILD/android_tls.a"
+    $ANDROID_AR rcs "$ANDROID_A" "$ANDROID_O_DIR"/*.o 2>/dev/null
+    echo "    Created $ANDROID_A"
+    # Simple sed with short relative paths
+    cd "$BUN_BUILD"
+    if grep -q "libtcc" "$BUILD_NINJA" 2>/dev/null; then
+        echo "    libtcc.a already in build.ninja inputs"
     else
-        echo "    Could not find 'build bun:' rule, trying alternative patterns..."
-        for pattern in "^build bun-: CXX_LINK" "^build release: CXX_LINK"; do
-            if grep -q "$pattern" "$BUILD_NINJA" 2>/dev/null; then
-                python3 -c "
-import re, sys
-n, p, e = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(n) as f: t = f.read()
-t = re.sub(r'(?m)^(' + p.split(':')[0].strip() + r' .*)$', lambda m: m.group(1) + ' ' + e, t, count=1)
-with open(n, 'w') as f: f.write(t)
-print('Added via pattern')
-" "$BUILD_NINJA" "$pattern" "$EXTRA_LINKS" 2>&1 && echo "    Added via pattern: $pattern"
-                break
-            fi
-        done
+        # Add absolute paths directly — shorter than full WORK_DIR paths via symlink
+        sed -i "s|^build bun: \(.*\)|build bun: \1 $ANDROID_A $LIBTCC_A|" "$BUILD_NINJA"
+        echo "    Added libtcc.a and android_tls.a to bun link inputs"
     fi
 else
     echo "WARNING: libtcc.a not found at $LIBTCC_A"
