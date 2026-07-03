@@ -137,6 +137,33 @@ jobs:
           sudo ln -sf "${NDK_CLANG_DIR}lib/linux/aarch64/libunwind.a" \
             "${FLAT_DIR}/aarch64/libunwind.a"
           echo "Android compiler-rt symlinks created in LLVM 21 resource dir"
+          # Install a strip wrapper BEFORE Bun build.
+          # Bun's ninja build calls: strip --strip-all bun-profile extra1.a extra2.a -o bun
+          # llvm-strip doesn't support multi-input + -o, and GNU strip can't handle aarch64.
+          # The wrapper strips only the first input (the actual binary) and discards extras.
+          sudo tee /usr/local/bin/strip-wrapper > /dev/null << 'STRIP_WRAPPER'
+#!/bin/bash
+# Strip wrapper for Bun's ninja multi-input strip rule.
+# Parses args, strips only the first positional (the binary), writes to -o output.
+NDK_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+OUTPUT=""
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o) OUTPUT="$2"; shift 2;;
+        *)  POSITIONAL+=("$1"); shift;;
+    esac
+done
+FIRST="${POSITIONAL[0]}"
+if [[ -n "$OUTPUT" ]]; then
+    "$NDK_STRIP" --strip-all --strip-debug --discard-all "$FIRST" -o "$OUTPUT"
+else
+    "$NDK_STRIP" --strip-all --strip-debug --discard-all "$FIRST"
+fi
+STRIP_WRAPPER
+          sudo chmod +x /usr/local/bin/strip-wrapper
+          sudo ln -sf /usr/local/bin/strip-wrapper /usr/local/bin/strip
+          echo "Installed strip wrapper for multi-input support"
 
       - name: Install Bun (host, pinned for module graph compatibility)
         run: |
@@ -215,13 +242,9 @@ jobs:
         run: |
           BUN_BINARY="${WORK_DIR}/bun-build/bun"
           NDK_STRIP="/opt/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
-          # Override /usr/local/bin/strip AFTER Bun build.
-          # During Bun build, strip is called with multiple inputs (bun-profile + .a files)
-          # which llvm-strip doesn't support with -o. GNU strip handles this fine.
+          # Replace the strip wrapper with real llvm-strip for standalone stripping
           if [ -x "$NDK_STRIP" ]; then
             sudo ln -sf "$NDK_STRIP" /usr/local/bin/strip
-          fi
-          if [ -x "$NDK_STRIP" ]; then
             echo "Before stripping:"
             ls -lh "$BUN_BINARY"
             cp "$BUN_BINARY" "${BUN_BINARY}.unstripped"
