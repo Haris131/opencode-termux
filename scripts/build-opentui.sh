@@ -37,15 +37,12 @@ fi
 # Apply Android patches:
 #   1. android-libc-link.patch: skips linkLibC/linkLibCpp for Android,
 #      provides NDK paths and links system libs manually instead.
-#   2. yoga-page-allocator.patch: replaces c_allocator with page_allocator
-#      to remove the only direct c_allocator reference in Zig source.
 echo ">>> Resetting opentui source files to pristine state..."
 cd "$OPENTUI_SRC"
 git checkout -- packages/core/src/zig/ 2>/dev/null || true
 
 for patch in \
-    "$REPO_ROOT/patches/opentui/android-libc-link.patch" \
-    "$REPO_ROOT/patches/opentui/yoga-page-allocator.patch"
+    "$REPO_ROOT/patches/opentui/android-libc-link.patch"
 do
     if [ -f "$patch" ]; then
         patch_name=$(basename "$patch")
