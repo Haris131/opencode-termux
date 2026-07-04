@@ -32,6 +32,79 @@ else
     echo ">>> OpenCode source exists at $OPENCODE_SRC"
 fi
 
+# Patch watcher.ts for Android standalone file watching
+# In standalone binaries, dlopen() cannot load .node from Bun's virtual FS ($bunfs/).
+# Patch watcher.ts to extract watcher.node to real disk before require().
+WATCHER_TS="$OPENCODE_SRC/packages/core/src/filesystem/watcher.ts"
+if [ -f "$WATCHER_TS" ]; then
+    echo ">>> Patching watcher.ts for Android standalone..."
+    python3 - "$WATCHER_TS" << 'PATCHSCRIPT'
+import sys
+
+filepath = sys.argv[1]
+with open(filepath, 'r') as f:
+    content = f.read()
+
+OLD = """  try {
+    const libc = typeof OPENCODE_LIBC === "undefined" ? undefined : OPENCODE_LIBC
+    const binding = require(
+      `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? `-${libc || "glibc"}` : ""}`,
+    )
+    return createWrapper(binding) as typeof import("@parcel/watcher")
+  } catch {
+    return
+  }"""
+
+NEW = """  try {
+    // In standalone binaries, dlopen() cannot load .node from Bun's virtual
+    // filesystem ($bunfs/). Extract watcher.node from $bunfs to real disk first.
+    try {
+      const fs = require("fs")
+      const tmpDir = process.env.TMPDIR || "/tmp"
+      const extractDir = tmpDir + "/opencode-parcel"
+      fs.mkdirSync(extractDir, { recursive: true })
+      const realPath = extractDir + "/watcher.node"
+      if (!fs.existsSync(realPath)) {
+        // fs.readFileSync CAN read from $bunfs virtual filesystem paths.
+        // Try known paths where the watcher.node is embedded in the module graph.
+        const candidates = [
+          "/$bunfs/root/node_modules/.bun/@parcel+watcher-linux-x64-glibc@2.5.1/node_modules/@parcel/watcher-linux-x64-glibc/watcher.node",
+          "node_modules/.bun/@parcel+watcher-linux-x64-glibc@2.5.1/node_modules/@parcel/watcher-linux-x64-glibc/watcher.node",
+        ]
+        let data = null
+        for (const p of candidates) {
+          try { data = fs.readFileSync(p); if (data?.length) break } catch {}
+        }
+        if (data?.length) {
+          fs.writeFileSync(realPath, data)
+          console.error("[opencode-parcel] Extracted from $bunfs (" + data.length + " bytes)")
+        } else {
+          console.error("[opencode-parcel] watcher.node not found in $bunfs, using polling")
+          return
+        }
+      }
+      const binding = require(realPath)
+      return createWrapper(binding) as typeof import("@parcel/watcher")
+    } catch (e) { console.error("[opencode-parcel] Error: " + e) }
+    const libc = typeof OPENCODE_LIBC === "undefined" ? undefined : OPENCODE_LIBC
+    const binding = require(
+      `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? `-${libc || "glibc"}` : ""}`,
+    )
+    return createWrapper(binding) as typeof import("@parcel/watcher")
+  } catch {
+    return
+  }"""
+
+if OLD in content:
+    content = content.replace(OLD, NEW, 1)
+    with open(filepath, 'w') as f:
+        f.write(content)
+    print("    watcher.ts patched successfully")
+else:
+    print("    WARNING: watcher.ts pattern not found (already patched or source changed)")
+PATCHSCRIPT
+fi
+
 OPENCODE_PKG="$OPENCODE_SRC/packages/opencode"
 
 # Install OpenCode dependencies
@@ -75,14 +148,23 @@ echo ">>> Searching for @parcel/watcher packages..."
 PARCEL_ARM64=""
 PARCEL_X64=""
 
-# Find ARM64 package
-while IFS= read -r f; do
-    if [ -f "$f" ]; then
-        PARCEL_ARM64="$f"
-        echo "    Found ARM64: $f"
-        break
-    fi
-done < <(find "$OPENCODE_SRC" "$OPENCODE_PKG" -name "watcher.node" -path "*parcel*arm64*" 2>/dev/null)
+# First try custom-built watcher.node (built from source with NDK for Android libc++)
+CUSTOM_WATCHER="$WORK_DIR/watcher-build/watcher.node"
+if [ -f "$CUSTOM_WATCHER" ]; then
+    PARCEL_ARM64="$CUSTOM_WATCHER"
+    echo "    Using custom-built watcher.node: $CUSTOM_WATCHER"
+fi
+
+# Find ARM64 package from npm
+if [ -z "$PARCEL_ARM64" ]; then
+    while IFS= read -r f; do
+        if [ -f "$f" ]; then
+            PARCEL_ARM64="$f"
+            echo "    Found ARM64 (npm): $f"
+            break
+        fi
+    done < <(find "$OPENCODE_SRC" "$OPENCODE_PKG" -name "watcher.node" -path "*parcel*arm64*" 2>/dev/null)
+fi
 
 # Find x64 glibc package
 while IFS= read -r f; do

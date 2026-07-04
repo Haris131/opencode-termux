@@ -1,0 +1,44 @@
+diff --git a/packages/core/src/filesystem/watcher.ts b/packages/core/src/filesystem/watcher.ts
+index b0f568a..e4f4a7c 100644
+--- a/packages/core/src/filesystem/watcher.ts
++++ b/packages/core/src/filesystem/watcher.ts
+@@ -24,9 +24,32 @@
+ 
+ const watcher = lazy((): typeof import("@parcel/watcher") | undefined => {
+   try {
+-    const libc = typeof OPENCODE_LIBC === "undefined" ? undefined : OPENCODE_LIBC
+-    const binding = require(
+-      `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? `-${libc || "glibc"}` : ""}`,
++    // Try to load watcher from real disk first. In standalone binaries,
++    // dlopen() cannot load .node files from Bun's virtual filesystem ($bunfs/).
++    // Extract the .node bytes to real disk so dlopen() can execute them.
++    try {
++      const fs = require("fs")
++      const tmpDir = process.env.TMPDIR || "/tmp"
++      const extractDir = tmpDir + "/opencode-parcel"
++      fs.mkdirSync(extractDir, { recursive: true })
++      const realPath = extractDir + "/watcher.node"
++      if (!fs.existsSync(realPath)) {
++        const possiblePaths = [
++          "/$bunfs/root/node_modules/.bun/@parcel+watcher-linux-x64-glibc@2.5.1/node_modules/@parcel/watcher-linux-x64-glibc/watcher.node",
++          "node_modules/.bun/@parcel+watcher-linux-x64-glibc@2.5.1/node_modules/@parcel/watcher-linux-x64-glibc/watcher.node",
++          "@parcel/watcher-linux-x64-glibc",
++        ]
++        let nodeData: Buffer | null = null
++        for (const p of possiblePaths) {
++          try { nodeData = fs.readFileSync(p); if (nodeData?.length) break } catch {}
++        }
++        if (nodeData?.length) fs.writeFileSync(realPath, nodeData)
++      }
++      if (fs.existsSync(realPath)) {
++        const binding = require(realPath)
++        return createWrapper(binding) as typeof import("@parcel/watcher")
++      }
++    } catch {}
++    // Fallback: standard require with platform-based package resolution
++    const libc = typeof OPENCODE_LIBC === "undefined" ? undefined : OPENCODE_LIBC
++    const binding = require(
++      `@parcel/watcher-${process.platform}-${process.arch}${process.platform === "linux" ? `-${libc || "glibc"}` : ""}`,
+     )
+     return createWrapper(binding) as typeof import("@parcel/watcher")
+   } catch {
