@@ -103,7 +103,7 @@ HOST_BUN="${HOST_BUN:-bun}"
     --arch=aarch64 \
     --configure-only \
     --webkit=prebuilt \
-    --tinycc \
+    --tinycc=true \
     2>&1
 
 echo ""
