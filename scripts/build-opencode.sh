@@ -39,6 +39,14 @@ echo ">>> Installing OpenCode dependencies..."
 cd "$OPENCODE_SRC"
 "$HOST_BUN" install
 
+# Install ARM64 @parcel/watcher platform package for native file watching
+# On Android aarch64, watcher.ts resolves to @parcel/watcher-linux-arm64-glibc
+# The host bun install only pulls x86_64 packages, so we install the ARM64 variant explicitly.
+echo ">>> Installing ARM64 @parcel/watcher..."
+cd "$OPENCODE_SRC/packages/core"
+"$HOST_BUN" add @parcel/watcher-linux-arm64-glibc@2.5.1 --optional 2>&1 || echo "    WARNING: Failed to install @parcel/watcher-linux-arm64-glibc, watcher may use polling fallback"
+cd "$OPENCODE_SRC"
+
 # Find the Android bun binary
 ANDROID_BUN="$BUN_BUILD/bun"
 if [ ! -f "$ANDROID_BUN" ]; then
