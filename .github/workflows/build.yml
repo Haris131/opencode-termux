@@ -254,14 +254,6 @@ jobs:
             echo "WARNING: llvm-strip not found, skipping strip"
           fi
 
-      - name: Compress Bun binary
-        run: |
-          source scripts/env.sh
-          mkdir -p "${WORK_DIR}/packages"
-          tar -cJf "${WORK_DIR}/packages/bun-v${BUN_VERSION}.tar.xz" -C "$BUN_BUILD" bun
-          echo "Created bun-v${BUN_VERSION}.tar.xz"
-          ls -lh "${WORK_DIR}/packages/bun-v${BUN_VERSION}.tar.xz"
-
       # =============================================
       # Install Zig (needed for opentui build)
       # =============================================
@@ -338,6 +330,14 @@ jobs:
         run: |
           echo "=== Built packages ==="
           ls -lh "${WORK_DIR}/packages/"
+
+      - name: Compress Bun binary
+        run: |
+          source scripts/env.sh
+          mkdir -p "${WORK_DIR}/packages"
+          tar -cJf "${WORK_DIR}/packages/bun-v${BUN_VERSION}.tar.xz" -C "$BUN_BUILD" bun
+          echo "Created bun-v${BUN_VERSION}.tar.xz"
+          ls -lh "${WORK_DIR}/packages/bun-v${BUN_VERSION}.tar.xz"
 
       # =============================================
       # Upload artifacts
