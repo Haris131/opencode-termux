@@ -44,25 +44,45 @@ cd "$OPENCODE_SRC"
 # The host bun install only pulls x86_64 packages, so we install the ARM64 variant
 # and copy its watcher.node into the x64 package dir so the bundler embeds it.
 echo ">>> Installing ARM64 @parcel/watcher..."
+
+# First try bun add (which updates lockfile)
 cd "$OPENCODE_SRC/packages/core"
-"$HOST_BUN" add @parcel/watcher-linux-arm64-glibc@2.5.1 --optional 2>&1 || echo "    WARNING: Failed to install @parcel/watcher-linux-arm64-glibc"
+"$HOST_BUN" add @parcel/watcher-linux-arm64-glibc@2.5.1 --optional 2>&1 || true
 cd "$OPENCODE_SRC"
 
+# If bun didn't download the file, download and extract it manually
+PARCEL_ARM64_DIR=""
+while IFS= read -r f; do
+    if [ -d "$(dirname "$f")" ]; then
+        PARCEL_ARM64_DIR="$(dirname "$f")"
+        break
+    fi
+done < <(find "$OPENCODE_SRC" "$OPENCODE_PKG" -name "watcher.node" -path "*parcel*arm64*" 2>/dev/null)
+
+if [ -z "$PARCEL_ARM64_DIR" ]; then
+    echo "    bun add did not download the file, fetching manually..."
+    PARCEL_ARM64_DIR="${OPENCODE_SRC}/node_modules/@parcel/watcher-linux-arm64-glibc"
+    mkdir -p "$PARCEL_ARM64_DIR"
+    TMP_TGZ="${TMPDIR:-/tmp}/parcel-arm64.tgz"
+    curl -fsSL "https://registry.npmjs.org/@parcel/watcher-linux-arm64-glibc/-/watcher-linux-arm64-glibc-2.5.1.tgz" -o "$TMP_TGZ"
+    tar xzf "$TMP_TGZ" -C "$PARCEL_ARM64_DIR" --strip-components=1
+    rm -f "$TMP_TGZ"
+    echo "    Extracted to $PARCEL_ARM64_DIR"
+fi
+
 # Copy ARM64 watcher.node into the x64 package so bundler embeds it
-# At build time process.arch=x64, so bundler resolves @parcel/watcher-linux-x64-glibc
-# We overwrite its watcher.node with the ARM64 version
 echo ">>> Searching for @parcel/watcher packages..."
 PARCEL_ARM64=""
 PARCEL_X64=""
 
-# Find ARM64 package (search everywhere including bun virtual store)
+# Find ARM64 package
 while IFS= read -r f; do
     if [ -f "$f" ]; then
         PARCEL_ARM64="$f"
         echo "    Found ARM64: $f"
         break
     fi
-done < <(find "$OPENCODE_SRC/node_modules" "$OPENCODE_PKG/node_modules" -path "*watcher-linux-arm64*/watcher.node" 2>/dev/null)
+done < <(find "$OPENCODE_SRC" "$OPENCODE_PKG" -name "watcher.node" -path "*parcel*arm64*" 2>/dev/null)
 
 # Find x64 glibc package
 while IFS= read -r f; do
@@ -71,11 +91,10 @@ while IFS= read -r f; do
         echo "    Found x64: $f"
         break
     fi
-done < <(find "$OPENCODE_SRC/node_modules" "$OPENCODE_PKG/node_modules" -path "*watcher-linux-x64-glibc*/watcher.node" 2>/dev/null)
+done < <(find "$OPENCODE_SRC" "$OPENCODE_PKG" -name "watcher.node" -path "*parcel*x64*glibc*" 2>/dev/null)
 
 if [ -n "$PARCEL_ARM64" ] && [ -n "$PARCEL_X64" ]; then
     echo ">>> Swapping x64 watcher.node with ARM64 version"
-    file "$PARCEL_ARM64" 2>/dev/null | grep -q "aarch64\|ARM" && echo "    Verified: ARM64 binary" || echo "    Note: Cannot verify arch on x86 host"
     cp "$PARCEL_X64" "${PARCEL_X64}.x64.bak"
     cp "$PARCEL_ARM64" "$PARCEL_X64"
     echo "    $PARCEL_X64 replaced with ARM64 version"
