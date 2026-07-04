@@ -57,30 +57,34 @@ if [ ! -f "$ARM64_LIBOPENTUI" ]; then
 fi
 
 # Find x86_64 libopentui.so in node_modules and swap it
-# OpenCode uses @opentui/core-linux-x64 which has the x86_64 version
+# OpenCode uses @opentui/core-linux-x64 (and possibly core-linux-x64-musl)
+# which has the x86_64 version. Bun builds use musl so it may resolve to
+# the musl variant. Swap BOTH to ensure the ARM64 .so is embedded.
 OPENTUI_NODE_MODULE=""
 for candidate in \
+    "$OPENCODE_SRC/node_modules/@opentui/core-linux-x64-musl/libopentui.so" \
     "$OPENCODE_SRC/node_modules/@opentui/core-linux-x64/libopentui.so" \
+    "$OPENCODE_PKG/node_modules/@opentui/core-linux-x64-musl/libopentui.so" \
     "$OPENCODE_PKG/node_modules/@opentui/core-linux-x64/libopentui.so" \
+    "$OPENCODE_SRC/node_modules/.bun/@opentui+core-linux-x64-musl@*/node_modules/@opentui/core-linux-x64-musl/libopentui.so" \
     "$OPENCODE_SRC/node_modules/.bun/@opentui+core-linux-x64@*/node_modules/@opentui/core-linux-x64/libopentui.so"
 do
     # Handle glob
     for f in $candidate; do
         if [ -f "$f" ]; then
-            OPENTUI_NODE_MODULE="$f"
-            break 2
+            echo ">>> Swapping x86_64 libopentui.so with ARM64 version: $f"
+            BACKUP_FILE="${f}.x64.bak"
+            cp "$f" "$BACKUP_FILE"
+            cp "$ARM64_LIBOPENTUI" "$f"
+            echo "    Backed up to $BACKUP_FILE"
+            if [ -z "$OPENTUI_NODE_MODULE" ]; then
+                OPENTUI_NODE_MODULE="$f"
+            fi
         fi
     done
 done
 
-BACKUP_FILE=""
-if [ -n "$OPENTUI_NODE_MODULE" ]; then
-    echo ">>> Swapping x86_64 libopentui.so with ARM64 version..."
-    BACKUP_FILE="${OPENTUI_NODE_MODULE}.x64.bak"
-    cp "$OPENTUI_NODE_MODULE" "$BACKUP_FILE"
-    cp "$ARM64_LIBOPENTUI" "$OPENTUI_NODE_MODULE"
-    echo "    Backed up to $BACKUP_FILE"
-else
+if [ -z "$OPENTUI_NODE_MODULE" ]; then
     echo "WARNING: Could not find x86_64 libopentui.so in node_modules"
     echo "         The build may embed the wrong architecture"
 fi
@@ -88,8 +92,10 @@ fi
 # Create @opentui/core-linux-arm64 for ARM64 platform detection
 # @opentui/core's zig.ts does:
 #   if (process.arch === "arm64") return await import("@opentui/core-linux-arm64")
-# The ARM64 .so is swapped into @opentui/core-linux-x64 above, so we mirror
-# the entire package directory so Bun.build() embeds it for runtime resolution.
+# At bundle time (x86_64 host), the bundler follows the x64 code path.
+# The ARM64 .so is already swapped into the x64 packages above.
+# We also create the arm64 package so that if runtime code ever tries to
+# import it directly, it resolves to the ARM64 .so.
 if [ -n "$OPENTUI_NODE_MODULE" ]; then
     OPENTUI_X64_DIR="$(dirname "$OPENTUI_NODE_MODULE")"
     OPENTUI_ARM64_DIR="${OPENTUI_X64_DIR//linux-x64/linux-arm64}"
