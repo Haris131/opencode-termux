@@ -41,11 +41,49 @@ cd "$OPENCODE_SRC"
 
 # Install ARM64 @parcel/watcher platform package for native file watching
 # On Android aarch64, watcher.ts resolves to @parcel/watcher-linux-arm64-glibc
-# The host bun install only pulls x86_64 packages, so we install the ARM64 variant explicitly.
+# The host bun install only pulls x86_64 packages, so we install the ARM64 variant
+# and copy its watcher.node into the x64 package dir so the bundler embeds it.
 echo ">>> Installing ARM64 @parcel/watcher..."
 cd "$OPENCODE_SRC/packages/core"
-"$HOST_BUN" add @parcel/watcher-linux-arm64-glibc@2.5.1 --optional 2>&1 || echo "    WARNING: Failed to install @parcel/watcher-linux-arm64-glibc, watcher may use polling fallback"
+"$HOST_BUN" add @parcel/watcher-linux-arm64-glibc@2.5.1 --optional 2>&1 || echo "    WARNING: Failed to install @parcel/watcher-linux-arm64-glibc"
 cd "$OPENCODE_SRC"
+
+# Copy ARM64 watcher.node into the x64 package so bundler embeds it
+# At build time process.arch=x64, so bundler resolves @parcel/watcher-linux-x64-glibc
+# We overwrite its watcher.node with the ARM64 version
+echo ">>> Searching for @parcel/watcher packages..."
+PARCEL_ARM64=""
+PARCEL_X64=""
+
+# Find ARM64 package (search everywhere including bun virtual store)
+while IFS= read -r f; do
+    if [ -f "$f" ]; then
+        PARCEL_ARM64="$f"
+        echo "    Found ARM64: $f"
+        break
+    fi
+done < <(find "$OPENCODE_SRC/node_modules" "$OPENCODE_PKG/node_modules" -path "*watcher-linux-arm64*/watcher.node" 2>/dev/null)
+
+# Find x64 glibc package
+while IFS= read -r f; do
+    if [ -f "$f" ]; then
+        PARCEL_X64="$f"
+        echo "    Found x64: $f"
+        break
+    fi
+done < <(find "$OPENCODE_SRC/node_modules" "$OPENCODE_PKG/node_modules" -path "*watcher-linux-x64-glibc*/watcher.node" 2>/dev/null)
+
+if [ -n "$PARCEL_ARM64" ] && [ -n "$PARCEL_X64" ]; then
+    echo ">>> Swapping x64 watcher.node with ARM64 version"
+    file "$PARCEL_ARM64" 2>/dev/null | grep -q "aarch64\|ARM" && echo "    Verified: ARM64 binary" || echo "    Note: Cannot verify arch on x86 host"
+    cp "$PARCEL_X64" "${PARCEL_X64}.x64.bak"
+    cp "$PARCEL_ARM64" "$PARCEL_X64"
+    echo "    $PARCEL_X64 replaced with ARM64 version"
+elif [ -n "$PARCEL_ARM64" ]; then
+    echo ">>> ARM64 watcher.node found but no x64 glibc package to replace"
+else
+    echo ">>> WARNING: ARM64 @parcel/watcher not found, watcher will use polling fallback"
+fi
 
 # Find the Android bun binary
 ANDROID_BUN="$BUN_BUILD/bun"
