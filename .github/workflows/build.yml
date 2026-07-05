@@ -275,14 +275,6 @@ jobs:
           source scripts/env.sh
           ./scripts/build-opentui.sh
 
-      # Build @parcel/watcher from source for Android
-      # The npm prebuilt uses libstdc++ (glibc), but Android/Bionic only has libc++.
-      # Building from source with NDK clang++ produces a compatible watcher.node.
-      - name: Build @parcel/watcher (Android)
-        run: |
-          source scripts/env.sh
-          ./scripts/build-parcel-watcher.sh
-
       # Build OpenCode standalone binary
       # =============================================
       - name: Build OpenCode standalone binary
