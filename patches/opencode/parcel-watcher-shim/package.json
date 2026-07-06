@@ -1,0 +1,8 @@
+{
+  "name": "@parcel/watcher-linux-arm64-glibc",
+  "version": "2.5.1",
+  "main": "index.js",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "license": "MIT"
+}

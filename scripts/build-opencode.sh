@@ -5,10 +5,12 @@
 #
 # This script:
 # 1. Clones OpenCode if needed
-# 2. Swaps x86_64 libopentui.so with ARM64 version
-# 3. Creates synthetic @opentui/core-linux-arm64 package for platform detection
-# 4. Runs the TypeScript build script to create the standalone binary
-# 5. Restores original libopentui.so and cleans up synthetic package
+# 2. Installs fs.watch-based parcel-watcher shim for ARM64
+# 3. Patches watcher.ts to use the shim on ARM64 (instead of @parcel/watcher .node)
+# 4. Swaps x86_64 libopentui.so with ARM64 version
+# 5. Creates synthetic @opentui/core-linux-arm64 package for platform detection
+# 6. Runs the TypeScript build script to create the standalone binary
+# 7. Restores original libopentui.so and cleans up synthetic package
 #
 # Requires:
 # - Android Bun binary built (scripts/build-bun.sh)
@@ -39,6 +41,51 @@ OPENCODE_PKG="$OPENCODE_SRC/packages/opencode"
 echo ">>> Installing OpenCode dependencies..."
 cd "$OPENCODE_SRC"
 "$HOST_BUN" install
+
+# Install fs.watch shim for ARM64 file watching
+# The native @parcel/watcher .node addon uses libstdc++ (glibc) which is
+# unavailable on Android/Bionic. The shim uses Bun's built-in fs.watch
+# which uses inotify under the hood (verified: inotify fds appear).
+echo ">>> Installing parcel-watcher shim for ARM64..."
+SHIM_SRC="$REPO_ROOT/patches/opencode/parcel-watcher-shim"
+WATCHER_DIR="$OPENCODE_SRC/packages/core/src/filesystem"
+if [ -d "$SHIM_SRC" ] && [ -f "$SHIM_SRC/index.js" ]; then
+    # Copy shim to node_modules as @parcel/watcher-linux-arm64-glibc
+    # This makes require("@parcel/watcher-linux-arm64-glibc") resolve to the shim
+    mkdir -p "$OPENCODE_SRC/node_modules/@parcel/watcher-linux-arm64-glibc"
+    cp "$SHIM_SRC/index.js" "$OPENCODE_SRC/node_modules/@parcel/watcher-linux-arm64-glibc/"
+    cp "$SHIM_SRC/package.json" "$OPENCODE_SRC/node_modules/@parcel/watcher-linux-arm64-glibc/"
+    echo "    Installed shim to node_modules/@parcel/watcher-linux-arm64-glibc"
+
+    # Also install as @parcel/watcher-android-arm64 for Termux (process.platform=android)
+    mkdir -p "$OPENCODE_SRC/node_modules/@parcel/watcher-android-arm64"
+    cp "$SHIM_SRC/index.js" "$OPENCODE_SRC/node_modules/@parcel/watcher-android-arm64/"
+    # Fix package.json: os=android (not linux)
+    sed 's/"os": \["linux"\]/"os": ["android"]/' "$SHIM_SRC/package.json" \
+        > "$OPENCODE_SRC/node_modules/@parcel/watcher-android-arm64/package.json"
+    echo "    Installed shim to node_modules/@parcel/watcher-android-arm64"
+
+    # Also install as @parcel/watcher-linux-x64-glibc to cover x64 host bundling
+    mkdir -p "$OPENCODE_SRC/node_modules/@parcel/watcher-linux-x64-glibc"
+    cp "$SHIM_SRC/index.js" "$OPENCODE_SRC/node_modules/@parcel/watcher-linux-x64-glibc/"
+    sed 's/"cpu": \["arm64"\]/"cpu": ["x64"]/' "$SHIM_SRC/package.json" \
+        | sed 's/"name": "@parcel\/watcher-linux-arm64-glibc"/"name": "@parcel\/watcher-linux-x64-glibc"/' \
+        > "$OPENCODE_SRC/node_modules/@parcel/watcher-linux-x64-glibc/package.json"
+    echo "    Installed shim to node_modules/@parcel/watcher-linux-x64-glibc"
+
+    # Copy shim to source tree for static import in watcher.ts
+    mkdir -p "$WATCHER_DIR/parcel-watcher-shim"
+    cp "$SHIM_SRC/index.js" "$WATCHER_DIR/parcel-watcher-shim/index.js"
+    echo "    Copied shim to $WATCHER_DIR/parcel-watcher-shim/"
+
+    # Apply patch to watcher.ts
+    echo ">>> Patching watcher.ts for fs.watch shim..."
+    python3 "$REPO_ROOT/scripts/patch-watcher.py" \
+        "$WATCHER_DIR/watcher.ts" \
+        "$WATCHER_DIR/parcel-watcher-shim/index.js"
+else
+    echo "WARNING: parcel-watcher-shim not found at $SHIM_SRC"
+fi
 
 # Find the Android bun binary
 ANDROID_BUN="$BUN_BUILD/bun"
