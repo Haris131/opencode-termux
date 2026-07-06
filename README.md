@@ -110,8 +110,8 @@ This project got OpenCode (a ~165MB standalone binary built on Bun + WebKit/JSC)
 7. **Cross-compiling TinyCC** -- Bun links against libtcc.a for FFI support. TinyCC's build system assumes a host build, so we cross-compile it separately and inject the library.
 
 ### Build pipeline
-
 ```
+
 Stage 1: ICU 75.1          ~5 min    (cross-compile for Android)
 Stage 2: WebKit/JSC        ~60-90 min (cross-compile, CACHED)
 Stage 3: TinyCC            ~1 min    (cross-compile libtcc.a)
@@ -119,6 +119,7 @@ Stage 4: Bun binary        ~30-45 min (CMake + Ninja, CACHED)
 Stage 5: libopentui.so     ~1 min    (Zig build for aarch64-linux-android)
 Stage 6: OpenCode bundle   ~30 sec   (bun build --compile, extract module graph via ELF section, embed as separate PT_LOAD)
 Stage 7: Packages          ~10 sec   (zip + pacman + deb)
+```
 
 With warm caches (WebKit + Bun cached), CI runs complete in ~6 minutes.
 
