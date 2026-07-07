@@ -5,7 +5,8 @@
 #
 # OpenCode's TUI renderer (@opentui/core) uses a native Zig library.
 # The upstream build targets aarch64-linux (musl), which fails on Android
-# because getauxval cannot be resolved. We build for aarch64-linux-android.
+# because getauxval cannot be resolved. We build for aarch64-linux-musl
+# and link NDK's libc.so for Bionic compatibility.
 
 set -euo pipefail
 
@@ -56,6 +57,14 @@ do
         fi
     fi
 done
+
+# Copy errno_shim.c for Android builds (provides __errno_location symbol)
+# Bionic libc does not export __errno_location as a shared symbol, but
+# glibc/musl-compiled C++ code may reference it. This shim provides it.
+if [ -f "$REPO_ROOT/patches/opentui/errno_shim.c" ]; then
+    cp "$REPO_ROOT/patches/opentui/errno_shim.c" "$OPENTUI_SRC/packages/core/src/zig/"
+    echo "    Copied errno_shim.c"
+fi
 
 OPENTUI_ZIG_DIR="$OPENTUI_SRC/packages/core/src/zig"
 
