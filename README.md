@@ -463,7 +463,7 @@ The Bun team [closed Android support as "not planned"](https://github.com/oven-s
 | ICU | 75.1 | Matches Bun's expected ICU |
 | TinyCC | `b91835d8` (oven-sh/tinycc) | Matches Bun's expected TinyCC |
 | OpenCode | 1.17.14 | Current release |
-| opentui | `0ce8e531` (v0.4.3) | Matches OpenCode v1.17.14 catalog |
+| opentui | `5803b2cf` (v0.4.3) | Matches OpenCode v1.17.14 catalog |
 
 ---
 
