@@ -1,8 +1,18 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..7e5a2fe 100644
+index 0c82ba3..d66a05b 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
-@@ -134,6 +134,27 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
+@@ -38,6 +38,9 @@ const YOGA_CXX_FLAGS = [_][]const u8{
+     "-std=c++20",
+     "-fexceptions",
+     "-frtti",
++    "-D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE",
++    "-Dstrtoll_l=strtoll",
++    "-Dstrtoull_l=strtoull",
+ };
+ 
+ const YOGA_CXX_SOURCES = [_][]const u8{
+@@ -134,6 +137,26 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
      );
  }
  
@@ -14,7 +24,6 @@ index 0c82ba3..7e5a2fe 100644
 +    const api = b.graph.env_map.get("ANDROID_API") orelse "29";
 +    const ndk_lib = b.fmt("{s}/usr/lib/aarch64-linux-android/{s}", .{ndk_sys, api});
 +    artifact.addIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/c++/v1", .{ndk_sys}) });
-+    // Use isystem for C headers (keep Zig's headers as primary, NDK as fallback)
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{ndk_sys}) });
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/aarch64-linux-android", .{ndk_sys}) });
 +    artifact.addLibraryPath(.{ .cwd_relative = ndk_lib });
@@ -30,7 +39,7 @@ index 0c82ba3..7e5a2fe 100644
  fn addMiniaudioShim(
      b: *std.Build,
      artifact: *std.Build.Step.Compile,
-@@ -141,6 +162,15 @@ fn addMiniaudioShim(
+@@ -141,6 +164,15 @@ fn addMiniaudioShim(
      macos_sdk_path: ?[]const u8,
  ) void {
      const c_flags: []const []const u8 = switch (target.result.os.tag) {
@@ -46,7 +55,7 @@ index 0c82ba3..7e5a2fe 100644
          .macos => blk: {
              const flags = b.allocator.alloc([]const u8, 4) catch @panic("OOM");
              flags[0] = "-std=c99";
-@@ -153,7 +183,12 @@ fn addMiniaudioShim(
+@@ -153,7 +185,12 @@ fn addMiniaudioShim(
      };
  
      artifact.addIncludePath(b.path("."));
@@ -60,7 +69,7 @@ index 0c82ba3..7e5a2fe 100644
      artifact.addCSourceFile(.{
          .file = b.path("miniaudio_shim.c"),
          .flags = c_flags,
-@@ -190,8 +225,10 @@ fn addNativeAudioDependencies(
+@@ -190,8 +227,10 @@ fn addNativeAudioDependencies(
      switch (target.result.os.tag) {
          .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
          .linux => {
@@ -73,7 +82,7 @@ index 0c82ba3..7e5a2fe 100644
          },
          else => {},
      }
-@@ -199,8 +236,9 @@ fn addNativeAudioDependencies(
+@@ -199,8 +238,9 @@ fn addNativeAudioDependencies(
  
  fn addYogaDependencies(b: *std.Build, artifact: *std.Build.Step.Compile) void {
      const yoga_dep = b.dependency("yoga", .{});
