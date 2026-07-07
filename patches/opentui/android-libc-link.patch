@@ -1,8 +1,16 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..7c42d92 100644
+index 0c82ba3..e5a7676 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
-@@ -134,6 +134,26 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
+@@ -38,6 +38,7 @@ const YOGA_CXX_FLAGS = [_][]const u8{
+     "-std=c++20",
+     "-fexceptions",
+     "-frtti",
++    "-D__errno_location=__errno",
+ };
+ 
+ const YOGA_CXX_SOURCES = [_][]const u8{
+@@ -134,6 +135,25 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
      );
  }
  
@@ -17,12 +25,11 @@ index 0c82ba3..7c42d92 100644
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{ndk_sys}) });
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/aarch64-linux-android", .{ndk_sys}) });
 +    artifact.addLibraryPath(.{ .cwd_relative = ndk_lib });
-+    // Use linkSystemLibrary so ELF gets NEEDED libc.so (runtime dlopen resolves symbols)
-+    artifact.linkSystemLibrary("c");
-+    artifact.linkSystemLibrary("m");
-+    artifact.linkSystemLibrary("c++_shared");
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/crtbegin_so.o", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/crtend_so.o", .{ndk_lib}) });
++    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libc.so", .{ndk_lib}) });
++    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libm.so", .{ndk_lib}) });
++    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/libc++_shared.so", .{ndk_sys}) });
 +}
 +
 +
