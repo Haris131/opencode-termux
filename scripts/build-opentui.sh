@@ -64,7 +64,7 @@ if [ ! -f "$OPENTUI_ZIG_DIR/build.zig" ]; then
     exit 1
 fi
 
-echo ">>> Building with Zig (target: aarch64-linux-android.29)..."
+echo ">>> Building with Zig (target: aarch64-linux-musl)..."
 
 # Diagnostic: check NDK C++ headers location
 echo ">>> Checking NDK C++ headers..."
@@ -88,14 +88,14 @@ export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
 cd "$OPENTUI_ZIG_DIR"
 
 "$ZIG_BIN" build \
-    -Dtarget=aarch64-linux-android.29 \
+    -Dtarget=aarch64-linux-musl \
     -Doptimize=ReleaseFast \
     --prefix . 2>&1
 
 # The build.zig installs to dest_dir="../lib/{output_name}" relative to
 # the --prefix dir.  With --prefix=. (= OPENTUI_ZIG_DIR), the .so ends
-# up one directory above: packages/core/src/lib/aarch64-linux-android/
-LIBOPENTUI="$OPENTUI_ZIG_DIR/../lib/aarch64-linux-android.29/libopentui.so"
+# up one directory above: packages/core/src/lib/aarch64-linux-musl/
+LIBOPENTUI="$OPENTUI_ZIG_DIR/../lib/aarch64-linux-musl/libopentui.so"
 if [ ! -f "$LIBOPENTUI" ]; then
     echo "ERROR: libopentui.so not found"
     echo "  Expected at: $LIBOPENTUI"

@@ -93,7 +93,7 @@ opencode-termux/
 
 This project got OpenCode (a ~165MB standalone binary built on Bun + WebKit/JSC) running on Android/Termux, which required:
 
-> **Updated to OpenCode v1.17.13** — Latest stable release with improved model support, bug fixes, and performance enhancements. See [OpenCode v1.17.13 release notes](https://github.com/anomalyco/opencode/releases/tag/v1.17.13).
+> **Updated to OpenCode v1.17.14** — Latest stable release.
 
 1. **Cross-compiling Bun v1.3.14 for Android/aarch64** -- Bun has zero Android support. We patched 33+ files across the build system (CMake, Zig), syscall layer, Bionic libc compatibility, JSC/JIT configuration, and linker settings.
 
@@ -462,6 +462,8 @@ The Bun team [closed Android support as "not planned"](https://github.com/oven-s
 | WebKit/JSC | `017930eb` (oven-sh/WebKit) | Proven working, patches validated |
 | ICU | 75.1 | Matches Bun's expected ICU |
 | TinyCC | `b91835d8` (oven-sh/tinycc) | Matches Bun's expected TinyCC |
+| OpenCode | 1.17.14 | Current release |
+| opentui | `0ce8e531` (v0.4.3) | Matches OpenCode v1.17.14 catalog |
 
 ---
 
