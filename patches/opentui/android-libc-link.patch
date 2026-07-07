@@ -1,5 +1,5 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..f91c098 100644
+index 0c82ba3..e7d1a82 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
 @@ -38,6 +38,8 @@ const YOGA_CXX_FLAGS = [_][]const u8{
@@ -11,7 +11,7 @@ index 0c82ba3..f91c098 100644
  };
  
  const YOGA_CXX_SOURCES = [_][]const u8{
-@@ -134,6 +136,26 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
+@@ -134,6 +136,27 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
      );
  }
  
@@ -30,7 +30,8 @@ index 0c82ba3..f91c098 100644
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/crtend_so.o", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libc.so", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libm.so", .{ndk_lib}) });
-+    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/libc++_shared.so", .{ndk_sys}) });
++    // Use static libc++ to avoid runtime NEEDED libc++_shared.so dependency
++    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/libc++_static.a", .{ndk_sys}) });
 +    artifact.addCSourceFile(.{ .file = b.path("errno_shim.c"), .flags = &.{} });
 +}
 +
@@ -38,7 +39,7 @@ index 0c82ba3..f91c098 100644
  fn addMiniaudioShim(
      b: *std.Build,
      artifact: *std.Build.Step.Compile,
-@@ -141,6 +163,18 @@ fn addMiniaudioShim(
+@@ -141,6 +164,18 @@ fn addMiniaudioShim(
      macos_sdk_path: ?[]const u8,
  ) void {
      const c_flags: []const []const u8 = switch (target.result.os.tag) {
@@ -57,7 +58,7 @@ index 0c82ba3..f91c098 100644
          .macos => blk: {
              const flags = b.allocator.alloc([]const u8, 4) catch @panic("OOM");
              flags[0] = "-std=c99";
-@@ -153,7 +187,12 @@ fn addMiniaudioShim(
+@@ -153,7 +188,12 @@ fn addMiniaudioShim(
      };
  
      artifact.addIncludePath(b.path("."));
@@ -71,7 +72,7 @@ index 0c82ba3..f91c098 100644
      artifact.addCSourceFile(.{
          .file = b.path("miniaudio_shim.c"),
          .flags = c_flags,
-@@ -190,8 +229,10 @@ fn addNativeAudioDependencies(
+@@ -190,8 +230,10 @@ fn addNativeAudioDependencies(
      switch (target.result.os.tag) {
          .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
          .linux => {
@@ -84,7 +85,7 @@ index 0c82ba3..f91c098 100644
          },
          else => {},
      }
-@@ -199,8 +240,9 @@ fn addNativeAudioDependencies(
+@@ -199,8 +241,9 @@ fn addNativeAudioDependencies(
  
  fn addYogaDependencies(b: *std.Build, artifact: *std.Build.Step.Compile) void {
      const yoga_dep = b.dependency("yoga", .{});
