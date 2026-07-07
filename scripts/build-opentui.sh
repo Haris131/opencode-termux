@@ -61,9 +61,9 @@ done
 # Copy errno_shim.c for Android builds (provides __errno_location symbol)
 # Bionic libc does not export __errno_location as a shared symbol, but
 # glibc/musl-compiled C++ code may reference it. This shim provides it.
-if [ -f "$REPO_ROOT/patches/opentui/errno_shim.c" ]; then
-    cp "$REPO_ROOT/patches/opentui/errno_shim.c" "$OPENTUI_SRC/packages/core/src/zig/"
-    echo "    Copied errno_shim.c"
+if [ -f "$REPO_ROOT/patches/opentui/android_shim.c" ]; then
+    cp "$REPO_ROOT/patches/opentui/android_shim.c" "$OPENTUI_SRC/packages/core/src/zig/"
+    echo "    Copied android_shim.c"
 fi
 if [ -f "$REPO_ROOT/patches/opentui/locale_shim.h" ]; then
     cp "$REPO_ROOT/patches/opentui/locale_shim.h" "$OPENTUI_SRC/packages/core/src/zig/"
