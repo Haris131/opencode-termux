@@ -1,0 +1,12 @@
+diff --git a/packages/core/src/models-dev.ts b/packages/core/src/models-dev.ts
+index 4a1b2c3..d1e2f3a 100644
+--- a/packages/core/src/models-dev.ts
++++ b/packages/core/src/models-dev.ts
+@@ -226,7 +226,7 @@
+       yield* events.publish(Event.Refreshed, {})
+     }),
+   ).pipe(
+-    Effect.tapCause((cause) => Effect.logError("Failed to fetch models.dev", { cause: cause })),
++    Effect.tapCause(() => Effect.logError("Failed to fetch models.dev")),
+     Effect.ignore,
+   )

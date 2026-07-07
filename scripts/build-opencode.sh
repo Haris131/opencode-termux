@@ -34,6 +34,16 @@ else
     echo ">>> OpenCode source exists at $OPENCODE_SRC"
 fi
 
+# Apply OpenCode patches
+for patch in "$REPO_ROOT/patches/opencode/"*.patch; do
+    if [ -f "$patch" ]; then
+        echo ">>> Applying OpenCode patch: $(basename "$patch")"
+        git -C "$OPENCODE_SRC" apply --check "$patch" && \
+            git -C "$OPENCODE_SRC" apply "$patch" || \
+            echo "    WARNING: Patch failed or already applied: $(basename "$patch")"
+    fi
+done
+
 
 OPENCODE_PKG="$OPENCODE_SRC/packages/opencode"
 
