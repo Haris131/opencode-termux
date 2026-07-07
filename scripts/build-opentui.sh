@@ -65,6 +65,10 @@ if [ -f "$REPO_ROOT/patches/opentui/errno_shim.c" ]; then
     cp "$REPO_ROOT/patches/opentui/errno_shim.c" "$OPENTUI_SRC/packages/core/src/zig/"
     echo "    Copied errno_shim.c"
 fi
+if [ -f "$REPO_ROOT/patches/opentui/locale_shim.h" ]; then
+    cp "$REPO_ROOT/patches/opentui/locale_shim.h" "$OPENTUI_SRC/packages/core/src/zig/"
+    echo "    Copied locale_shim.h"
+fi
 
 OPENTUI_ZIG_DIR="$OPENTUI_SRC/packages/core/src/zig"
 
