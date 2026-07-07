@@ -1,5 +1,5 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..3ad8b4c 100644
+index 0c82ba3..db6d95b 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
 @@ -38,6 +38,8 @@ const YOGA_CXX_FLAGS = [_][]const u8{
@@ -22,7 +22,7 @@ index 0c82ba3..3ad8b4c 100644
 +    const ndk_sys = b.fmt("{s}/sysroot", .{ndk_tc});
 +    const api = b.graph.env_map.get("ANDROID_API") orelse "29";
 +    const ndk_lib = b.fmt("{s}/usr/lib/aarch64-linux-android/{s}", .{ndk_sys, api});
-+    const clang_rt = b.fmt("{s}/lib/clang/21/lib/linux", .{ndk_tc});
++    const clang_rt = b.fmt("{s}/lib/clang/19/lib/linux", .{ndk_tc});
 +    artifact.addIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/c++/v1", .{ndk_sys}) });
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{ndk_sys}) });
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/aarch64-linux-android", .{ndk_sys}) });
@@ -60,20 +60,21 @@ index 0c82ba3..3ad8b4c 100644
          .macos => blk: {
              const flags = b.allocator.alloc([]const u8, 4) catch @panic("OOM");
              flags[0] = "-std=c99";
-@@ -153,7 +190,11 @@ fn addMiniaudioShim(
+@@ -153,7 +190,12 @@ fn addMiniaudioShim(
      };
  
      artifact.addIncludePath(b.path("."));
 -    artifact.linkLibC();
 +    if (b.graph.env_map.get("ANDROID_NDK_HOME") != null) {
 +        addAndroidNdkPaths(b, artifact);
++        artifact.linkLibC();
 +    } else {
 +        artifact.linkLibC();
 +    }
      artifact.addCSourceFile(.{
          .file = b.path("miniaudio_shim.c"),
          .flags = c_flags,
-@@ -190,8 +231,10 @@ fn addNativeAudioDependencies(
+@@ -190,8 +232,10 @@ fn addNativeAudioDependencies(
      switch (target.result.os.tag) {
          .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
          .linux => {
@@ -86,7 +87,7 @@ index 0c82ba3..3ad8b4c 100644
          },
          else => {},
      }
-@@ -199,8 +242,9 @@ fn addNativeAudioDependencies(
+@@ -199,8 +243,9 @@ fn addNativeAudioDependencies(
  
  fn addYogaDependencies(b: *std.Build, artifact: *std.Build.Step.Compile) void {
      const yoga_dep = b.dependency("yoga", .{});

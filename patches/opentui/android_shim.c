@@ -17,13 +17,16 @@ static __thread int __shim_errno = 0;
 int *__errno_location(void) { return &__shim_errno; }
 
 /* ===== copy_file_range (API 34+) ===== */
-ssize_t copy_file_range(int, off64_t *, int, off64_t *, size_t, unsigned int) {
+/* off64_t does not exist in musl headers; use off_t (64-bit on LP64). */
+ssize_t copy_file_range(int fd_in, off_t *off_in, int fd_out, off_t *off_out, size_t len, unsigned int flags) {
+    (void)fd_in; (void)off_in; (void)fd_out; (void)off_out; (void)len; (void)flags;
     errno = ENOSYS;
     return -1;
 }
 
 /* ===== close_range (API 30+) ===== */
-int close_range(unsigned int, unsigned int, int) {
+int close_range(unsigned int first, unsigned int last, int flags) {
+    (void)first; (void)last; (void)flags;
     errno = ENOSYS;
     return -1;
 }
