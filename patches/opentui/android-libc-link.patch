@@ -1,5 +1,5 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..88f453c 100644
+index 0c82ba3..27b58fc 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
 @@ -38,6 +38,9 @@ const YOGA_CXX_FLAGS = [_][]const u8{
@@ -88,12 +88,25 @@ index 0c82ba3..88f453c 100644
          },
          else => {},
      }
-@@ -199,8 +244,9 @@ fn addNativeAudioDependencies(
+@@ -199,8 +244,22 @@ fn addNativeAudioDependencies(
  
  fn addYogaDependencies(b: *std.Build, artifact: *std.Build.Step.Compile) void {
      const yoga_dep = b.dependency("yoga", .{});
 -
 -    artifact.linkLibCpp();
++    // Patch yoga Node.cpp to not throw on Android (child-owner assertion uses C++ exceptions)
++    if (b.graph.env_map.get("ANDROID_NDK_HOME") != null) {
++        const node_cpp = b.pathJoin(&.{ yoga_dep.path("").getPath(b), "yoga", "node", "Node.cpp" });
++        if (std.fs.accessAbsolute(node_cpp, .{})) {
++            const content = std.fs.cwd().readFileAlloc(b.allocator, node_cpp, 1 << 20) catch "";
++            if (std.mem.indexOf(u8, content, "Child already has a owner") != null) {
++                const patched = std.mem.replace(u8, content, "throw std::logic_error("Child already has a owner, it must be removed first.");", "child->setOwner(nullptr);", .{});
++                if (patched) {
++                    std.fs.cwd().writeFile(node_cpp, content) catch {};
++                }
++            }
++        }
++    }
 +    if (b.graph.env_map.get("ANDROID_NDK_HOME") == null) {
 +        artifact.linkLibCpp();
 +    }
