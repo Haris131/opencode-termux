@@ -6,7 +6,7 @@ on:
       opencode_version:
         description: 'OpenCode version to build'
         required: false
-        default: '1.17.14'
+        default: '1.17.13'
       commit_sha:
         description: 'Commit hash or branch name'
         required: false
@@ -19,7 +19,7 @@ on:
 env:
   BUN_VERSION: "1.3.14"
   HOST_BUN_VERSION: "1.3.14"
-  OPENCODE_VERSION: "1.17.14"
+  OPENCODE_VERSION: "1.17.13"
   ANDROID_API: "24"
   ANDROID_NDK_VERSION: "28.1.13356709"
   WEBKIT_COMMIT: "017930ebf915121f8f593bef61cbbca82d78132d"
@@ -166,7 +166,7 @@ jobs:
 
       - name: Install Bun (host, pinned for module graph compatibility)
         run: |
-          # Host Bun must support OpenCode v1.17.14's bun.lock format (v1) and
+          # Host Bun must support OpenCode v1.17.13's bun.lock format (v1) and
           # produce a module graph format compatible with the Android Bun's
           # patched StandaloneModuleGraph (52-byte stride).
           HOST_BUN_VERSION="$HOST_BUN_VERSION"
