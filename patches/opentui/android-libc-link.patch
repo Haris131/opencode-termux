@@ -1,5 +1,5 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..f10bb29 100644
+index 0c82ba3..37107ec 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
 @@ -38,6 +38,9 @@ const YOGA_CXX_FLAGS = [_][]const u8{
@@ -88,14 +88,14 @@ index 0c82ba3..f10bb29 100644
          },
          else => {},
      }
-@@ -199,8 +244,17 @@ fn addNativeAudioDependencies(
+@@ -199,8 +244,16 @@ fn addNativeAudioDependencies(
  
  fn addYogaDependencies(b: *std.Build, artifact: *std.Build.Step.Compile) void {
      const yoga_dep = b.dependency("yoga", .{});
 -
 -    artifact.linkLibCpp();
 +    if (b.graph.env_map.get("ANDROID_NDK_HOME") != null) {
-+        const patch_cmd = b.addSystemCommand(&.{
++        _ = b.addSystemCommand(&.{
 +            "sed", "-i",
 +            "s/throw std::logic_error(\"Child already has a owner, it must be removed first.\");/child->setOwner(nullptr);/",
 +            b.fmt("{s}/yoga/node/Node.cpp", .{yoga_dep.path("").getPath(b)}),
