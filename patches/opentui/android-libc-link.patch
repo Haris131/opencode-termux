@@ -1,20 +1,11 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..ecc7db6 100644
+index 9034757..e313fb4 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
-@@ -38,6 +38,8 @@ const YOGA_CXX_FLAGS = [_][]const u8{
-     "-std=c++20",
-     "-fexceptions",
-     "-frtti",
-+    "-D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE",
-+    "-include", "locale_shim.h",
- };
- 
- const YOGA_CXX_SOURCES = [_][]const u8{
-@@ -133,6 +135,29 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
-         .{target_description},
+@@ -106,6 +106,25 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
      );
  }
+ 
 +fn addAndroidNdkPaths(b: *std.Build, artifact: *std.Build.Step.Compile) void {
 +    const ndk_home = b.graph.env_map.get("ANDROID_NDK_HOME") orelse
 +        @panic("ANDROID_NDK_HOME must be set for Android builds");
@@ -22,37 +13,30 @@ index 0c82ba3..ecc7db6 100644
 +    const ndk_sys = b.fmt("{s}/sysroot", .{ndk_tc});
 +    const api = b.graph.env_map.get("ANDROID_API") orelse "29";
 +    const ndk_lib = b.fmt("{s}/usr/lib/aarch64-linux-android/{s}", .{ndk_sys, api});
-+    const clang_rt = b.fmt("{s}/lib/clang/19/lib/linux", .{ndk_tc});
 +    artifact.addIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/c++/v1", .{ndk_sys}) });
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{ndk_sys}) });
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/aarch64-linux-android", .{ndk_sys}) });
 +    artifact.addLibraryPath(.{ .cwd_relative = ndk_lib });
-+    artifact.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android", .{ndk_sys}) });
-+    artifact.addRPath(.{ .cwd_relative = "/data/data/com.termux/files/usr/lib" });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/crtbegin_so.o", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/crtend_so.o", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libc.so", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libm.so", .{ndk_lib}) });
-+    artifact.linkSystemLibrary("c++_shared");
-+    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libclang_rt.builtins-aarch64-android.a", .{clang_rt}) });
-+    artifact.addCSourceFile(.{ .file = b.path("android_shim.c"), .flags = &.{} });
++    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/libc++_shared.so", .{ndk_sys}) });
 +}
 +
- 
++
  fn addMiniaudioShim(
      b: *std.Build,
-@@ -141,6 +166,18 @@ fn addMiniaudioShim(
+     artifact: *std.Build.Step.Compile,
+@@ -113,6 +132,15 @@ fn addMiniaudioShim(
      macos_sdk_path: ?[]const u8,
  ) void {
      const c_flags: []const []const u8 = switch (target.result.os.tag) {
 +        .linux => blk: {
-+            if (b.graph.env_map.get("ANDROID_NDK_HOME") != null) {
-+                const flags = b.allocator.alloc([]const u8, 5) catch @panic("OOM");
++            if (target.result.abi == .android or target.result.abi == .androideabi) {
++                const flags = b.allocator.alloc([]const u8, 2) catch @panic("OOM");
 +                flags[0] = "-std=c99";
 +                flags[1] = "-DMA_NO_RUNTIME_LINKING";
-+                flags[2] = "-DMA_NO_ALSA";
-+                flags[3] = "-DMA_NO_PULSEAUDIO";
-+                flags[4] = "-DMA_NO_JACK";
 +                break :blk flags;
 +            }
 +            break :blk &.{"-std=c99"};
@@ -60,42 +44,29 @@ index 0c82ba3..ecc7db6 100644
          .macos => blk: {
              const flags = b.allocator.alloc([]const u8, 4) catch @panic("OOM");
              flags[0] = "-std=c99";
-@@ -153,7 +190,12 @@ fn addMiniaudioShim(
+@@ -125,7 +153,11 @@ fn addMiniaudioShim(
      };
  
      artifact.addIncludePath(b.path("."));
 -    artifact.linkLibC();
-+    if (b.graph.env_map.get("ANDROID_NDK_HOME") != null) {
++    if (target.result.abi == .android or target.result.abi == .androideabi) {
 +        addAndroidNdkPaths(b, artifact);
-+        artifact.linkLibC();
 +    } else {
 +        artifact.linkLibC();
 +    }
      artifact.addCSourceFile(.{
          .file = b.path("miniaudio_shim.c"),
          .flags = c_flags,
-@@ -190,8 +232,10 @@ fn addNativeAudioDependencies(
+@@ -162,8 +194,10 @@ fn addNativeAudioDependencies(
      switch (target.result.os.tag) {
          .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
          .linux => {
 -            artifact.linkSystemLibrary("dl");
 -            artifact.linkSystemLibrary("pthread");
-+            if (b.graph.env_map.get("ANDROID_NDK_HOME") == null) {
++            if (target.result.abi != .android and target.result.abi != .androideabi) {
 +                artifact.linkSystemLibrary("dl");
 +                artifact.linkSystemLibrary("pthread");
 +            }
          },
          else => {},
      }
-@@ -199,8 +243,9 @@ fn addNativeAudioDependencies(
- 
- fn addYogaDependencies(b: *std.Build, artifact: *std.Build.Step.Compile) void {
-     const yoga_dep = b.dependency("yoga", .{});
--
--    artifact.linkLibCpp();
-+    if (b.graph.env_map.get("ANDROID_NDK_HOME") == null) {
-+        artifact.linkLibCpp();
-+    }
-     artifact.addIncludePath(yoga_dep.path(""));
-     artifact.addCSourceFiles(.{
-         .root = yoga_dep.path(""),

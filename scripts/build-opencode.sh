@@ -107,7 +107,7 @@ fi
 
 # Find ARM64 libopentui.so
 # build.zig installs to ../lib/{target} relative to the zig dir
-ARM64_LIBOPENTUI="$OPENTUI_SRC/packages/core/src/lib/aarch64-linux-musl/libopentui.so"
+ARM64_LIBOPENTUI="$OPENTUI_SRC/packages/core/src/lib/aarch64-linux-android.29/libopentui.so"
 if [ ! -f "$ARM64_LIBOPENTUI" ]; then
     echo "ERROR: ARM64 libopentui.so not found at $ARM64_LIBOPENTUI"
     echo "       Run scripts/build-opentui.sh first."
