@@ -72,6 +72,82 @@ fi
 
 OPENTUI_ZIG_DIR="$OPENTUI_SRC/packages/core/src/zig"
 
+# Clone and patch yoga for Android (replace fatal assertion with silent reparenting)
+# The yoga v3.2.1 dependency is normally fetched by Zig, but we use a local
+# patched copy to avoid C++ exception abort at runtime.
+YOGA_SRC="${TMPDIR:-/tmp}/yoga-src"
+if [ ! -d "$YOGA_SRC/.git" ]; then
+    echo ">>> Cloning yoga v3.2.1..."
+    git clone --depth 1 --branch v3.2.1 https://github.com/facebook/yoga.git "$YOGA_SRC"
+fi
+# Patch YGNodeInsertChild: replace fatal assertion with silent old-owner detach
+if python3 -c "
+with open('${YOGA_SRC}/yoga/YGNode.cpp', 'r') as f:
+    content = f.read()
+old = '''  yoga::assertFatalWithNode(
+      owner,
+      child->getOwner() == nullptr,
+      \"Child already has a owner, it must be removed first.\");'''
+new = '''  // Patched for Android: detach from old owner instead of fatal
+  if (child->getOwner() != nullptr) {
+    child->getOwner()->removeChild(child);
+  }'''
+if old in content:
+    content = content.replace(old, new, 1)
+    with open('${YOGA_SRC}/yoga/YGNode.cpp', 'w') as f:
+        f.write(content)
+    print('OK')
+else:
+    print('NOT_FOUND')
+    sys.exit(1)
+"; then
+    echo "    yoga YGNode.cpp patched OK"
+else
+    echo "    WARNING: yoga YGNode.cpp pattern not found"
+fi
+# Copy patched yoga to opentui zig directory for local dependency
+YOGA_COPY_DIR="$OPENTUI_ZIG_DIR/yoga-local"
+rm -rf "$YOGA_COPY_DIR"
+mkdir -p "$YOGA_COPY_DIR"
+cp -a "$YOGA_SRC/." "$YOGA_COPY_DIR/"
+# Create minimal build.zig.zon for Zig dependency validation
+cat > "$YOGA_COPY_DIR/build.zig.zon" << 'ZONEOF'
+.{
+    .name = "yoga",
+    .version = "3.2.1",
+}
+ZONEOF
+
+# Modify build.zig.zon to use local path instead of git URL
+ZON_FILE="$OPENTUI_ZIG_DIR/build.zig.zon"
+if grep -q '.url = "git+https://github.com/facebook/yoga' "$ZON_FILE" 2>/dev/null; then
+    cp "$ZON_FILE" "${ZON_FILE}.bak"
+    if python3 -c "
+import sys
+with open('${ZON_FILE}', 'r') as f:
+    content = f.read()
+old_zon = '''        .yoga = .{
+            .url = \"git+https://github.com/facebook/yoga#v3.2.1\",
+            .hash = \"N-V-__8AAOYl0gAU76B1VRPFD9AWvy2VkOef2jN0B3sISTeO\",
+        },'''
+new_zon = '''        .yoga = .{
+            .path = \"yoga-local\",
+        },'''
+if old_zon in content:
+    content = content.replace(old_zon, new_zon, 1)
+    with open('${ZON_FILE}', 'w') as f:
+        f.write(content)
+    print('OK')
+else:
+    print('NOT_FOUND')
+    sys.exit(1)
+"; then
+        echo "    build.zig.zon patched to use local yoga"
+    else
+        echo "    WARNING: yoga dependency not found in build.zig.zon"
+    fi
+fi
+
 if [ ! -f "$OPENTUI_ZIG_DIR/build.zig" ]; then
     echo "ERROR: build.zig not found at $OPENTUI_ZIG_DIR"
     exit 1

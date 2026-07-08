@@ -1,21 +1,20 @@
 diff --git a/packages/core/src/zig/build.zig b/packages/core/src/zig/build.zig
-index 0c82ba3..37107ec 100644
+index 0c82ba3..a0e398a 100644
 --- a/packages/core/src/zig/build.zig
 +++ b/packages/core/src/zig/build.zig
-@@ -38,6 +38,9 @@ const YOGA_CXX_FLAGS = [_][]const u8{
+@@ -38,6 +38,8 @@ const YOGA_CXX_FLAGS = [_][]const u8{
      "-std=c++20",
      "-fexceptions",
      "-frtti",
-+    "-DNDEBUG",
 +    "-D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE",
 +    "-include", "locale_shim.h",
  };
  
  const YOGA_CXX_SOURCES = [_][]const u8{
-@@ -134,6 +137,29 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
+@@ -133,6 +135,29 @@ fn printMissingMacOSSDK(target_description: []const u8) void {
+         .{target_description},
      );
  }
- 
 +fn addAndroidNdkPaths(b: *std.Build, artifact: *std.Build.Step.Compile) void {
 +    const ndk_home = b.graph.env_map.get("ANDROID_NDK_HOME") orelse
 +        @panic("ANDROID_NDK_HOME must be set for Android builds");
@@ -28,21 +27,21 @@ index 0c82ba3..37107ec 100644
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{ndk_sys}) });
 +    artifact.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include/aarch64-linux-android", .{ndk_sys}) });
 +    artifact.addLibraryPath(.{ .cwd_relative = ndk_lib });
++    // Add rpath to find libc++_shared.so at runtime on Termux
++    artifact.addRPath(.{ .cwd_relative = "/data/data/com.termux/files/usr/lib" });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/crtbegin_so.o", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/crtend_so.o", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libc.so", .{ndk_lib}) });
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libm.so", .{ndk_lib}) });
-+    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/libc++_static.a", .{ndk_sys}) });
-+    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/usr/lib/aarch64-linux-android/libc++abi.a", .{ndk_sys}) });
++    artifact.linkSystemLibrary("c++_shared");
 +    artifact.addObjectFile(.{ .cwd_relative = b.fmt("{s}/libclang_rt.builtins-aarch64-android.a", .{clang_rt}) });
 +    artifact.addCSourceFile(.{ .file = b.path("android_shim.c"), .flags = &.{} });
 +}
 +
-+
+ 
  fn addMiniaudioShim(
      b: *std.Build,
-     artifact: *std.Build.Step.Compile,
-@@ -141,6 +167,18 @@ fn addMiniaudioShim(
+@@ -141,6 +166,18 @@ fn addMiniaudioShim(
      macos_sdk_path: ?[]const u8,
  ) void {
      const c_flags: []const []const u8 = switch (target.result.os.tag) {
@@ -61,7 +60,7 @@ index 0c82ba3..37107ec 100644
          .macos => blk: {
              const flags = b.allocator.alloc([]const u8, 4) catch @panic("OOM");
              flags[0] = "-std=c99";
-@@ -153,7 +191,12 @@ fn addMiniaudioShim(
+@@ -153,7 +190,12 @@ fn addMiniaudioShim(
      };
  
      artifact.addIncludePath(b.path("."));
@@ -75,7 +74,7 @@ index 0c82ba3..37107ec 100644
      artifact.addCSourceFile(.{
          .file = b.path("miniaudio_shim.c"),
          .flags = c_flags,
-@@ -190,8 +233,10 @@ fn addNativeAudioDependencies(
+@@ -190,8 +232,10 @@ fn addNativeAudioDependencies(
      switch (target.result.os.tag) {
          .macos => addMacOSSystemLibraries(b, artifact, macos_sdk_path.?),
          .linux => {
@@ -88,22 +87,3 @@ index 0c82ba3..37107ec 100644
          },
          else => {},
      }
-@@ -199,8 +244,16 @@ fn addNativeAudioDependencies(
- 
- fn addYogaDependencies(b: *std.Build, artifact: *std.Build.Step.Compile) void {
-     const yoga_dep = b.dependency("yoga", .{});
--
--    artifact.linkLibCpp();
-+    if (b.graph.env_map.get("ANDROID_NDK_HOME") != null) {
-+        _ = b.addSystemCommand(&.{
-+            "sed", "-i",
-+            "s/throw std::logic_error(\"Child already has a owner, it must be removed first.\");/child->setOwner(nullptr);/",
-+            b.fmt("{s}/yoga/node/Node.cpp", .{yoga_dep.path("").getPath(b)}),
-+        });
-+    }
-+    if (b.graph.env_map.get("ANDROID_NDK_HOME") == null) {
-+        artifact.linkLibCpp();
-+    }
-     artifact.addIncludePath(yoga_dep.path(""));
-     artifact.addCSourceFiles(.{
-         .root = yoga_dep.path(""),
